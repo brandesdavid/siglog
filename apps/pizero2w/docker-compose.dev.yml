@@ -1,0 +1,7 @@
+services:
+  siglog:
+    network_mode: bridge
+    ports:
+      - "8080:80"
+    environment:
+      - FAKE_SIGNALS=1
