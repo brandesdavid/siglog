@@ -7,8 +7,6 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-log = logging.getLogger("siglog.manual_capture")
-
 DATA = Path("/app/data")
 CAPTURE_DIR = DATA / "captures"
 CONTROL_DIR = DATA / "control"
@@ -20,8 +18,31 @@ SUPERVISOR_CONF = os.getenv(
     "SUPERVISOR_CONFIG", "/etc/supervisor/conf.d/siglog-no-gps.conf"
 )
 
+log = logging.getLogger("siglog.manual_capture")
+
 _capture_lock = threading.Lock()
 _capture_proc: subprocess.Popen | None = None
+
+
+def _capture_satellite_name(label: str, pass_name: str | None) -> str:
+    if pass_name:
+        return pass_name
+    low = label.lower()
+    if "apt" in low:
+        return "NOAA APT"
+    if "1379" in low:
+        return "METEOR-M2 3"
+    if "1371" in low:
+        return "METEOR-M 2"
+    return label.replace("_", " ")
+
+
+def _capture_decoder(label: str, decode_apt: bool, decoder: str | None) -> str:
+    if decoder:
+        return decoder
+    if decode_apt or "apt" in label.lower():
+        return "apt"
+    return "lrpt"
 
 
 def _write_capture_state(payload: dict) -> None:
@@ -114,6 +135,8 @@ def start_capture(
     label: str,
     decode_apt: bool = False,
     pass_name: str | None = None,
+    decoder: str | None = None,
+    max_elevation: float | None = None,
 ) -> dict:
     if capture_busy():
         return {"ok": False, "error": "Capture already running"}
@@ -209,6 +232,24 @@ def start_capture(
             else:
                 result["decodeError"] = (dec.stderr or "")[-400:]
                 result["message"] = "WAV saved, APT decode failed"
+        if ok:
+            try:
+                from satellite_log import log_satellite_signal
+
+                sat_name = _capture_satellite_name(label, pass_name)
+                dec = _capture_decoder(label, decode_apt, decoder)
+                if result.get("png"):
+                    detail = f"APT {result['png']} · {wav.name} @ {freq_mhz} MHz"
+                else:
+                    detail = f"LRPT {wav.name} @ {freq_mhz} MHz · {duration_sec}s"
+                log_satellite_signal(
+                    sat_name,
+                    detail,
+                    decoder=dec,
+                    max_elevation=max_elevation,
+                )
+            except Exception as e:
+                log.warning("satellite log failed: %s", e)
         _write_capture_state(result)
 
     threading.Thread(target=worker, daemon=True).start()

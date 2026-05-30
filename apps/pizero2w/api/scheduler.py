@@ -1,7 +1,6 @@
 import json
 import logging
 import os
-import sqlite3
 import subprocess
 import time
 from datetime import datetime, timedelta, timezone
@@ -55,16 +54,10 @@ def supervisorctl(*args: str) -> None:
     )
 
 
-def log_noaa_signal(name: str, detail: str, image: str) -> None:
-    con = sqlite3.connect(DB_PATH)
-    lat, lng = read_position()
-    con.execute(
-        "INSERT INTO signals (ts,type,callsign,detail,rarity,lat,lng) "
-        "VALUES (?,?,?,?,?,?,?)",
-        (int(time.time()), "NOAA", name, detail, "RARE", lat, lng),
-    )
-    con.commit()
-    con.close()
+def log_noaa_signal(name: str, detail: str, image: str, max_elevation: float | None = None) -> None:
+    from satellite_log import log_satellite_signal
+
+    log_satellite_signal(name, detail, decoder="apt", max_elevation=max_elevation)
     write_state(
         {
             "mode": "ADS-B",
@@ -176,7 +169,7 @@ def record_pass(pass_info) -> bool:
         return False
 
     detail = f"APT image {png.name} maxEl {pass_info.max_elevation:.0f}°"
-    log_noaa_signal(pass_info.name, detail, str(png))
+    log_noaa_signal(pass_info.name, detail, str(png), pass_info.max_elevation)
     log.info("NOAA capture OK: %s", png)
     return True
 

@@ -11,6 +11,7 @@ from typing import Optional
 from flask import Flask, jsonify, request, send_from_directory
 
 from plan_cache import enrich_plan_passes, pass_capture_params, read_plan_cache, write_plan_cache
+from satellite_log import refresh_satellite_rarities
 from satellite_passes import passes_with_tracks
 from hex_lookup import (
     all_lookups,
@@ -131,6 +132,9 @@ fixed = normalize_hex_only_rarity(db_con)
 if fixed:
     log.info("Set %d hex-only log entries from RARE to COMMON", fixed)
 reclassify_all_decoded(db_con)
+sat_updated = refresh_satellite_rarities(db_con)
+if sat_updated:
+    log.info("Refreshed rarity on %d satellite log entries", sat_updated)
 EXPORT_DIR = "/app/data/exports"
 
 
@@ -856,6 +860,8 @@ def api_control_capture():
                 label,
                 decode_apt=decode_apt,
                 pass_name=pass_row.get("name"),
+                decoder=pass_row.get("decoder"),
+                max_elevation=pass_row.get("maxElevation"),
             )
         )
     preset = body.get("preset", "lrpt1379")
