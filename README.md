@@ -1,55 +1,137 @@
 # SIGLOG
 
-Portable signal collector: RTL-SDR + GPS on a Raspberry Pi Zero 2W, live UI on an Adafruit ESP32-S3 Reverse TFT Feather.
+Portable signal collector: RTL-SDR + GPS on a Raspberry Pi Zero 2W, live UI on an Adafruit ESP32-S3 Reverse TFT Feather, planning map on your laptop.
 
 ## Hardware
 
 | Part | Role |
 |------|------|
-| Raspberry Pi Zero 2W | ADS-B (dump1090), GPS (NEO-6M on UART), API, SQLite log |
-| RTL-SDR R820T2 TCXO + dipole kit | 1090 MHz ADS-B (later NOAA/APRS/AIS) |
-| u-blox NEO-6M TTL | Geo-tag every catch |
-| Micro USB OTG adapter | RTL-SDR on the Pi’s USB OTG port |
-| ESP32-S3 Reverse TFT Feather | 240×135 display, WiFi client (same LAN as Pi) |
-| LiPo 2500 mAh + TP4056 | Pi + SDR power |
-| LiPo 500 mAh JST | Feather display power |
+| Raspberry Pi Zero 2W | ADS-B, satellite scheduler, API, SQLite log |
+| RTL-SDR R820T2 TCXO + dipole kit | 1090 MHz ADS-B; ~137 MHz Meteor LRPT |
+| u-blox NEO-6M TTL | Geo-tag catches (optional until wired) |
+| Micro USB OTG adapter | RTL-SDR on the Pi USB OTG port |
+| ESP32-S3 Reverse TFT Feather | 240×135 display, WiFi client (planned) |
+| LiPo + TP4056 | Pi + SDR power |
 
-Pi and Feather talk over WiFi only (no GPIO link). GPS uses pins 1, 6, 8, 10.
+Pi and Feather talk over WiFi only. GPS: pins 1, 6, 8, 10 on the Pi.
 
 ## Software layout
 
 ```
-apps/pizero2w/     Docker stack (dump1090, gpsd, Flask API)
-apps/esp32/        Feather firmware (ESP-IDF, planned)
+apps/pizero2w/     Docker: dump1090, scheduler, Flask API, Pi-Log-UI
+apps/laptop/       Planungskarte (nur Mac/Laptop, vor dem Rausgehen)
+apps/esp32/        Feather firmware (planned)
 ```
 
-## Pi Zero for testing
+---
 
-1. Flash **Raspberry Pi OS Lite (64-bit)** via Raspberry Pi Imager (SSH + home WiFi in advanced options).
-2. **Mac** (after code changes): `just push-pizero` (or `just release-pizero`).
-3. **Pi** (first time): clone repo or copy `justfile`, then `sudo apt install -y just` and `just setup-on-pi`.
-4. **Pi** (every update): `cd ~/siglog && just update-on-pi`. Never `docker compose build` on the Pi. GPS overlay only with `SIGLOG_GPS=1 just update-on-pi` when the NEO-6M is wired (UART enabled ≠ module present).
-5. **Mac** dev without SDR: `just run-pizero-fake` — API on http://localhost:8080
+## Was jetzt funktioniert
+
+| Feature | Status | Hinweis |
+|---------|--------|---------|
+| **ADS-B** Flugzeuge | ✅ | `dump1090-fa`, live in `/api/latest` |
+| **SQLite Log** | ✅ | Rarität, History, Geo wenn GPS da |
+| **Flask API** | ✅ | Port 80 im Container |
+| **Satelliten-Vorhersage** | ✅ | Meteor-M 2 / M2-3 / M2-4 (TLE) |
+| **`/api/passes`** | ✅ | Nächste Überflüge, Countdown |
+| **Laptop Planungskarte** | ✅ | `just laptop-map` — lädt `/api/map` vom Pi zuhause |
+| **Pi Log-UI** | ✅ | `http://<pi-ip>/` — offline, gesammelte Daten |
+| **WiFi `siglog-net`** | ✅ | Zuhause Router, draußen Hotspot (auto) |
+| **Docker auf Pi** | ✅ | Nur `pull`, nie `build` auf dem Zero |
+| **NOAA 15/18/19 APT** | ❌ | 2025 stillgelegt, nicht mehr im TLE |
+| **Meteor LRPT Bilder** | ⏳ | Pass-Vorhersage ja, Auto-Decode nein |
+| **APRS** | ⏳ | Noch nicht implementiert |
+| **AIS** | ⏳ | Noch nicht implementiert |
+| **ESP32 Display** | ⏳ | Pollt `/api/latest` (Firmware fehlt) |
+| **Cloud Weltkarte** | ⏳ | Sync zu Arasaka/Coolify geplant |
+| **Achievements** | ⏳ | Schema/API offen |
+
+Ein RTL-SDR = eine Frequenz zur Zeit. Der Scheduler stoppt ADS-B nur für geplantes NOAA-APT (derzeit ohne Ziel-Satelliten). Meteor-Pässe werden angezeigt, aber nicht automatisch aufgenommen.
+
+---
+
+## Was noch gebaut werden muss
+
+1. **ESP32 Firmware** — TFT, WiFi, `/api/latest`, Raritäts-Flash  
+2. **Meteor LRPT Decode** — z.B. SatDump oder rtl_fm + Decoder; WAV → Bild  
+3. **APRS** — `direwolf` auf 144.8 MHz, Zeitfenster neben ADS-B  
+4. **GPS am Pi** — `SIGLOG_GPS=1 just update-on-pi` wenn NEO-6M dran  
+5. **Push zur Cloud** — Hono/Bun/SQLite Dashboard, Karte aller Reisen  
+6. **Achievements** — Regeln aus deiner SIGLOG-Spec  
+7. **APRS/AIS Scheduler** — ein Dongle, mehrere Modi per Zeitplan  
+
+---
+
+## Pi Zero Setup
+
+1. Flash **Raspberry Pi OS Lite 64-bit** (Imager: SSH + Heim-WLAN).  
+2. **Mac:** `just push-pizero` nach Code-Änderungen.  
+3. **Pi (erstes Mal):** `just setup-on-pi` oder `setup.sh`.  
+4. **Pi (Update):** `cd ~/siglog && just update-on-pi`  
+5. **GPS optional:** `SIGLOG_GPS=1 just update-on-pi`  
 
 | Command | Where | What |
 |---------|-------|------|
-| `just push-pizero` | Mac | Build ARM64 image + push to GHCR |
-| `just update-on-pi` | Pi | Pull image + `up --no-build` |
-| `just net-auto` | Pi | WiFi home-first + hotspot fallback |
+| `just push-pizero` | Mac | ARM64 Image → GHCR |
+| `just update-on-pi` | Pi | `pull` + `up --no-build` |
+| `just run-pizero-fake` | Mac | Test ohne SDR: http://localhost:8080 |
+| `just net-auto` | Pi | Heim-WLAN zuerst, Hotspot Fallback |
 
-**WiFi (one-time on Pi):** `siglog-net auto` — at home the Pi uses your router; outdoors it starts hotspot `siglog-pi` after ~25s without internet. Before leaving you only need `siglog-net leave` once (optional). Status: `siglog-net status`. Emergency: `siglog-net hotspot` / `siglog-net wifi`.
+**Nicht auf dem Pi:** `docker compose build`, `git clone && make` für dump1090.
 
-**Do not** compile dump1090 on the Pi (`git clone` + `make`). Trixie has no `dump1090-fa` apt package; use the container image instead.
+Position ohne GPS: `SIGLOG_LAT` / `SIGLOG_LON` in `docker-compose.yml` (Default Berlin).
 
-ESP32 can point at `http://<pi-lan-ip>/api/latest` on the same LAN.
+---
+
+## Laptop Planungskarte (vor dem Rausgehen)
+
+Läuft **nicht** auf dem Pi. **Kein Pi nötig** — es gibt keine separate „Meteor-API“; Laptop und Pi nutzen dieselben **Celestrak-TLE** (Wetter-Satelliten-Gruppe) und berechnen Meteor-M-Pässe lokal.
+
+```bash
+just laptop-map
+```
+
+Browser: http://127.0.0.1:8765/
+
+1. Breite/Länge eintragen (oder **Standort**) → **Pässe berechnen**  
+2. Optional **Offline speichern** im Browser  
+3. **Nichts vom Laptop auf den Pi kopieren** — Planung ist unabhängig vom Zero  
+
+Der Pi braucht nur sein Docker-Image für ADS-B-Logging unterwegs (`just update-on-pi`). TLE-Cache auf dem Pi ist nur für den Scheduler dort, nicht für deine Laptop-Planung.
+
+## Pi Log-UI (unterwegs, ohne Internet)
+
+Am Pi-Hotspot oder Heim-WLAN — nur lokale API, keine CDN:
+
+```
+http://192.168.4.1/
+```
+
+oder Pi-IP aus `hostname -I`.
+
+- Gesamtanzahl Fänge, GPS-getaggt  
+- Live ADS-B (`/api/latest`)  
+- Raritäts-Balken  
+- Tabelle der letzten Fänge  
+
+Nach Code-Änderung: `just push-pizero` → Pi `just update-on-pi`.
+
+---
 
 ## API
 
-- `GET /api/latest` - current signal for the handheld UI (ADS-B or active NOAA pass)
-- `GET /api/passes` - next NOAA-15/18/19 passes (TLE + Skyfield), notify ~15 min before
-- `GET /api/history` - last 100 logged signals
-- `GET /api/health` - status
+| Endpoint | Beschreibung |
+|----------|----------------|
+| `GET /` | Pi Log-UI (offline) |
+| `GET /api/stats` | Zähler, Rarität, Typen |
+| `GET /api/map` | Pässe + Bodenspur (für Laptop) |
+| `GET /api/latest` | Aktuelles Signal für ESP32 |
+| `GET /api/passes` | Nächste Meteor-Pässe (JSON) |
+| `GET /api/history` | Letzte 100 Signale |
+| `GET /api/health` | Status |
 
-**One RTL-SDR:** ADS-B runs by default; ~15 min before a satellite pass the API shows `nextPass` and antenna hint (~54 cm dipole). NOAA 15/18/19 were **decommissioned in 2025** — pass prediction uses **Meteor-M** satellites from Celestrak instead. Auto APT decode via `noaa-apt` only applies if legacy NOAA TLE entries reappear; Meteor LRPT decode is planned separately.
+---
 
-Set observer position via GPS (when connected) or `SIGLOG_LAT` / `SIGLOG_LON` in `docker-compose.yml` (default Berlin).
+## Rechtliches Kurz
+
+Nur **legale passive** Signale: ADS-B, Amateurfunk wo erlaubt, Wetter-Satelliten. **Kein** Behördenfunk — in DE digital und verschlüsselt.

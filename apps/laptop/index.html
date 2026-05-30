@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SIGLOG Planung</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    :root {
+      --bg: #0a0e14;
+      --panel: #121820;
+      --border: #243044;
+      --text: #e8eef7;
+      --muted: #8b9cb3;
+      --accent: #3dd6c6;
+      --go: #5ce67a;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: flex-end;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+    }
+    h1 { font-size: 1.05rem; letter-spacing: 0.08em; margin-right: auto; align-self: center; }
+    label { font-size: 0.72rem; color: var(--muted); display: block; margin-bottom: 4px; }
+    input[type="text"], input[type="number"] {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 8px 10px;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      width: 100%;
+    }
+    .field { min-width: 88px; }
+    button {
+      background: var(--accent);
+      color: #041210;
+      border: none;
+      padding: 9px 14px;
+      border-radius: 6px;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 0.82rem;
+    }
+    button.secondary {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    main { display: grid; grid-template-columns: 1fr 300px; min-height: 0; }
+    #map { min-height: 55vh; background: #111; }
+    aside {
+      border-left: 1px solid var(--border);
+      background: var(--panel);
+      overflow-y: auto;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .card {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+      background: var(--bg);
+    }
+    .card.go { border-color: var(--go); }
+    .card h2 { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); margin-bottom: 6px; }
+    .card .title { font-size: 1.05rem; font-weight: 600; margin-bottom: 4px; }
+    .card .meta { font-size: 0.8rem; color: var(--muted); line-height: 1.4; }
+    .badge { display: inline-block; margin-top: 6px; padding: 3px 8px; border-radius: 4px; font-size: 0.7rem; font-weight: 600; background: #1e2a3d; color: var(--accent); }
+    .pass-list { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+    .pass-item { padding: 8px; border-radius: 8px; border: 1px solid var(--border); cursor: pointer; font-size: 0.78rem; }
+    .pass-item:hover, .pass-item.active { border-color: var(--accent); background: #15202e; }
+    .pass-item strong { display: block; margin-bottom: 2px; }
+    .hint { font-size: 0.72rem; color: var(--muted); line-height: 1.35; }
+    .status { font-size: 0.75rem; color: var(--muted); }
+    .err { color: #ff6b6b; }
+    .cached { color: #f5a623; }
+    @media (max-width: 900px) {
+      main { grid-template-columns: 1fr; }
+      aside { max-height: 42vh; border-left: none; border-top: 1px solid var(--border); }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>SIGLOG PLANUNG</h1>
+    <div class="field">
+      <label for="lat">Breite</label>
+      <input id="lat" type="number" step="0.0001" />
+    </div>
+    <div class="field">
+      <label for="lng">Länge</label>
+      <input id="lng" type="number" step="0.0001" />
+    </div>
+    <button type="button" class="secondary" id="geoBtn">Standort</button>
+    <button type="button" id="calcBtn">Pässe berechnen</button>
+    <button type="button" class="secondary" id="cacheBtn">Offline speichern</button>
+  </header>
+  <main>
+    <div id="map"></div>
+    <aside>
+      <p class="hint">
+        <strong>Kein Pi nötig.</strong> TLE kommt von Celestrak (wie auf dem Pi), Meteor-Pässe werden im Browser berechnet.
+        Nichts vom Laptop auf den Zero kopieren — der Pi loggt nur unterwegs ADS-B.
+      </p>
+      <div class="card go" id="goCard">
+        <h2>Wann rausgehen</h2>
+        <div class="title" id="goTitle">—</div>
+        <div class="meta" id="goMeta"></div>
+        <span class="badge" id="goBadge"></span>
+      </div>
+      <p class="status" id="statusLine"></p>
+      <ul class="pass-list" id="passList"></ul>
+    </aside>
+  </main>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/satellite.js@4.1.4/dist/satellite.min.js"></script>
+  <script src="passes.js"></script>
+  <script>
+    const CACHE_KEY = "siglogMapCache";
+    const POS_KEY = "siglogPos";
+    const $ = (id) => document.getElementById(id);
+    const map = L.map("map").setView([52.52, 13.405], 6);
+    L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+      attribution: "&copy; OSM &copy; CARTO",
+      maxZoom: 18,
+    }).addTo(map);
+    let observerMarker = null;
+    let trackLayer = null;
+    let lastData = null;
+
+    const saved = JSON.parse(localStorage.getItem(POS_KEY) || "{}");
+    $("lat").value = saved.lat ?? 52.52;
+    $("lng").value = saved.lng ?? 13.405;
+
+    function savePos() {
+      localStorage.setItem(
+        POS_KEY,
+        JSON.stringify({ lat: parseFloat($("lat").value), lng: parseFloat($("lng").value) })
+      );
+    }
+
+    function fmtLocal(iso) {
+      if (!iso) return "—";
+      return new Date(iso).toLocaleString("de-DE", {
+        weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
+      });
+    }
+
+    function renderGo(pass) {
+      const card = $("goCard");
+      if (!pass) {
+        $("goTitle").textContent = "Kein Pass";
+        $("goMeta").textContent = "Breite/Länge prüfen, dann berechnen.";
+        $("goBadge").textContent = "";
+        card.classList.remove("go");
+        return;
+      }
+      card.classList.add("go");
+      const urgent = pass.startInMin <= 20;
+      $("goTitle").textContent = urgent ? "Jetzt raus" : `Nächster Pass: ${pass.name}`;
+      $("goMeta").innerHTML =
+        `${fmtLocal(pass.aos)} – ${fmtLocal(pass.los)}<br>` +
+        `${pass.freqMhz} MHz · max ${pass.maxElevation}° · Dipol ~${pass.antennaCm} cm · LRPT`;
+      $("goBadge").textContent = `Start in ${pass.startInMin} min`;
+    }
+
+    function applyData(data, fromCache) {
+      lastData = data;
+      const obs = data.observer;
+      if (observerMarker) map.removeLayer(observerMarker);
+      observerMarker = L.circleMarker([obs.lat, obs.lng], {
+        radius: 10, color: "#f5a623", fillColor: "#f5a623", fillOpacity: 0.9, weight: 2,
+      }).bindPopup("Dein Standort").addTo(map);
+      map.setView([obs.lat, obs.lng], 8);
+      const passes = data.passes || [];
+      const src = fromCache ? "Offline-Cache" : data.source === "celestrak" ? "Celestrak TLE" : "berechnet";
+      $("statusLine").textContent = `${passes.length} Pässe (48 h) · ${src}`;
+      $("statusLine").className = fromCache ? "status cached" : "status";
+      const ul = $("passList");
+      ul.innerHTML = "";
+      passes.forEach((p, i) => {
+        const li = document.createElement("li");
+        li.className = "pass-item" + (i === 0 ? " active" : "");
+        li.innerHTML = `<strong>${p.name}</strong>${fmtLocal(p.aos)} · ${p.startInMin} min · ${p.maxElevation}°`;
+        li.onclick = () => drawPass(i);
+        ul.appendChild(li);
+      });
+      if (passes.length) drawPass(0);
+      else renderGo(null);
+    }
+
+    function drawPass(idx) {
+      if (!lastData?.passes[idx]) return;
+      const pass = lastData.passes[idx];
+      document.querySelectorAll(".pass-item").forEach((el, i) => el.classList.toggle("active", i === idx));
+      if (trackLayer) map.removeLayer(trackLayer);
+      const pts = (pass.track || []).map((p) => [p.lat, p.lng]);
+      if (pts.length < 2) return;
+      trackLayer = L.polyline(pts, { color: "#3dd6c6", weight: 3, opacity: 0.9 }).addTo(map);
+      const bounds = L.latLngBounds(pts);
+      bounds.extend([lastData.observer.lat, lastData.observer.lng]);
+      map.fitBounds(bounds, { padding: [40, 40] });
+      renderGo(pass);
+    }
+
+    async function calculate() {
+      savePos();
+      const lat = parseFloat($("lat").value);
+      const lng = parseFloat($("lng").value);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+        $("statusLine").textContent = "Ungültige Koordinaten";
+        $("statusLine").className = "status err";
+        return;
+      }
+      $("statusLine").textContent = "Lade TLE von Celestrak…";
+      $("statusLine").className = "status";
+      try {
+        const data = await computePasses(lat, lng, 48, 15);
+        localStorage.setItem(CACHE_KEY, JSON.stringify(data));
+        applyData(data, false);
+      } catch (e) {
+        $("statusLine").textContent = `Fehler: ${e.message}`;
+        $("statusLine").className = "status err";
+        loadCache(true);
+      }
+    }
+
+    function loadCache(silent) {
+      const raw = localStorage.getItem(CACHE_KEY);
+      if (!raw) {
+        if (!silent) $("statusLine").textContent = "Kein Cache — zuerst berechnen.";
+        return;
+      }
+      try {
+        applyData(JSON.parse(raw), true);
+      } catch {
+        $("statusLine").textContent = "Cache defekt";
+        $("statusLine").className = "status err";
+      }
+    }
+
+    $("calcBtn").onclick = calculate;
+    $("cacheBtn").onclick = () => {
+      if (!lastData) {
+        $("statusLine").textContent = "Erst Pässe berechnen.";
+        return;
+      }
+      localStorage.setItem(CACHE_KEY, JSON.stringify({ ...lastData, cachedAt: new Date().toISOString() }));
+      $("statusLine").textContent = "Offline gespeichert.";
+      $("statusLine").className = "status cached";
+    };
+    $("geoBtn").onclick = () => {
+      if (!navigator.geolocation) return;
+      navigator.geolocation.getCurrentPosition((pos) => {
+        $("lat").value = pos.coords.latitude.toFixed(5);
+        $("lng").value = pos.coords.longitude.toFixed(5);
+        savePos();
+        calculate();
+      });
+    };
+
+    loadCache(true);
+  </script>
+</body>
+</html>

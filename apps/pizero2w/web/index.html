@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SIGLOG Log</title>
+  <style>
+    :root {
+      --bg: #f0f0f0;
+      --paper: #ffffff;
+      --ink: #111111;
+      --muted: #444444;
+      --line: #222222;
+      --line-light: #bbbbbb;
+      --accent: #f5c400;
+      --scan: #e8e8e8;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: Arial, Helvetica, sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      font-size: 13px;
+      line-height: 1.35;
+    }
+    .wrap {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 12px;
+    }
+    .bar {
+      background: var(--paper);
+      border: 2px solid var(--line);
+      padding: 10px 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    .bar h1 {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+    .bar .mode {
+      font-size: 11px;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0;
+      margin-bottom: 10px;
+      border: 2px solid var(--line);
+      background: var(--line);
+    }
+    .cell {
+      background: var(--paper);
+      padding: 12px 10px;
+      border: none;
+      min-height: 72px;
+    }
+    .cell .n {
+      font-size: 28px;
+      font-weight: 700;
+      line-height: 1;
+      margin-bottom: 6px;
+    }
+    .cell .l {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: var(--muted);
+      letter-spacing: 0.04em;
+    }
+    .panel {
+      background: var(--paper);
+      border: 2px solid var(--line);
+      margin-bottom: 10px;
+    }
+    .panel-h {
+      background: var(--scan);
+      border-bottom: 2px solid var(--line);
+      padding: 6px 10px;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .live-body { padding: 12px 10px; }
+    .live-body .call {
+      font-size: 22px;
+      font-weight: 700;
+      font-family: "Courier New", Courier, monospace;
+    }
+    .live-body .sub {
+      margin-top: 6px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .known {
+      display: inline-block;
+      margin-top: 8px;
+      padding: 3px 6px;
+      border: 1px solid var(--line);
+      background: var(--accent);
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .rarity-grid {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 0;
+      border-top: 2px solid var(--line);
+    }
+    .rarity-cell {
+      border-right: 2px solid var(--line);
+      padding: 8px 6px;
+      text-align: center;
+      font-size: 11px;
+    }
+    .rarity-cell:last-child { border-right: none; }
+    .rarity-cell b {
+      display: block;
+      font-size: 18px;
+      margin-bottom: 2px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    th, td {
+      border: 1px solid var(--line-light);
+      padding: 6px 8px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: var(--scan);
+      font-size: 10px;
+      text-transform: uppercase;
+      font-weight: 700;
+      border-bottom: 2px solid var(--line);
+    }
+    .tag {
+      display: inline-block;
+      border: 1px solid var(--line);
+      padding: 1px 5px;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      background: var(--paper);
+    }
+    .LEGEND { background: #fff3cd; }
+    .EPIC { background: #e8dff5; }
+    .RARE { background: #dce8f5; }
+    .UNCOMMON { background: #e2f0e2; }
+    .COMMON { background: #f5f5f5; }
+    .foot {
+      margin-top: 10px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .err { color: #b00020; font-weight: 700; }
+    .tabs {
+      display: flex;
+      border: 2px solid var(--line);
+      border-bottom: none;
+      background: var(--scan);
+    }
+    .tab {
+      flex: 1;
+      padding: 8px 10px;
+      border: none;
+      border-right: 2px solid var(--line);
+      background: var(--scan);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      cursor: pointer;
+      color: var(--muted);
+    }
+    .tab:last-child { border-right: none; }
+    .tab.active {
+      background: var(--paper);
+      color: var(--ink);
+      margin-bottom: -2px;
+      padding-bottom: 10px;
+    }
+    .hex-note {
+      padding: 8px 10px;
+      font-size: 11px;
+      color: var(--muted);
+      border-bottom: 1px solid var(--line-light);
+      background: #fffef5;
+    }
+    .hex-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--line-light);
+      background: var(--paper);
+      align-items: center;
+    }
+    .btn {
+      border: 2px solid var(--line);
+      background: var(--accent);
+      color: var(--ink);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      padding: 7px 12px;
+      cursor: pointer;
+    }
+    .btn:disabled { opacity: 0.5; cursor: wait; }
+    .btn.secondary { background: var(--paper); }
+    .decode-msg { font-size: 11px; color: var(--muted); flex: 1; min-width: 120px; }
+    .subline { font-size: 10px; color: var(--muted); margin-top: 2px; }
+    .foot a { color: var(--ink); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="bar">
+      <h1>SIGLOG</h1>
+      <span class="mode" id="modeLine">—</span>
+    </div>
+    <div class="grid">
+      <div class="cell"><div class="n" id="totalN">0</div><div class="l">Entries</div></div>
+      <div class="cell"><div class="n" id="uniqN">0</div><div class="l">Unique</div></div>
+      <div class="cell"><div class="n" id="geoN">0</div><div class="l">GPS Fix</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-h">Live</div>
+      <div class="live-body">
+        <div class="call" id="liveCall">SCANNING</div>
+        <div class="sub" id="liveSub">—</div>
+        <span class="known" id="knownTag" hidden></span>
+      </div>
+      <div class="rarity-grid" id="rarityGrid"></div>
+    </div>
+    <div class="panel">
+      <div class="tabs">
+        <button type="button" class="tab active" id="tabIdent">Callsign</button>
+        <button type="button" class="tab" id="tabHex">Hex only</button>
+      </div>
+      <div id="panelIdent">
+        <table>
+          <thead>
+            <tr><th>Time</th><th>Call</th><th>Type</th><th>Rarity</th></tr>
+          </thead>
+          <tbody id="rowsIdent"></tbody>
+        </table>
+      </div>
+      <div id="panelHex" hidden>
+        <div class="hex-note">
+          Mode S hex only. Decode needs home Wi‑Fi (adsbdb.com). Results stay cached on the Pi.
+        </div>
+        <div class="hex-actions">
+          <button type="button" class="btn" id="decodeBtn">Decode hex</button>
+          <span class="decode-msg" id="decodeMsg"></span>
+        </div>
+        <table>
+          <thead>
+            <tr><th>Time</th><th>Hex</th><th>Decoded</th><th>Rarity</th></tr>
+          </thead>
+          <tbody id="rowsHex"></tbody>
+        </table>
+      </div>
+    </div>
+    <p class="foot">
+      Same aircraft logged at most once per 30 min.
+      <a href="/api/export" download="siglog-export.json">Download JSON</a>
+      · Mac: <code>just sync-siglog-github</code>
+    </p>
+  </div>
+  <script>
+    const RARITY_ORDER = ["LEGEND", "EPIC", "RARE", "UNCOMMON", "COMMON"];
+    let activeTab = "ident";
+    let historyRows = [];
+
+    function fmtTs(ts) {
+      return new Date(ts * 1000).toLocaleString("en-US", {
+        day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
+      });
+    }
+
+    function renderRarity(byRarity) {
+      const grid = document.getElementById("rarityGrid");
+      grid.innerHTML = "";
+      for (const r of RARITY_ORDER) {
+        const n = byRarity[r] || 0;
+        const cell = document.createElement("div");
+        cell.className = "rarity-cell";
+        cell.innerHTML = `<b>${n}</b>${r}`;
+        grid.appendChild(cell);
+      }
+    }
+
+    async function refresh() {
+      try {
+        const [stats, latest, history] = await Promise.all([
+          fetch("/api/stats").then((r) => r.json()),
+          fetch("/api/latest").then((r) => r.json()),
+          fetch("/api/history?limit=40").then((r) => r.json()),
+        ]);
+        document.getElementById("totalN").textContent = stats.total;
+        document.getElementById("uniqN").textContent = stats.uniqueAircraft ?? "—";
+        document.getElementById("geoN").textContent = stats.withGpsFix ?? 0;
+        document.getElementById("modeLine").textContent =
+          (latest.mode || "ADS-B") + (latest.gpsLocked ? " · GPS" : "");
+        document.getElementById("liveCall").textContent =
+          latest.displayCall || latest.callsign || "SCANNING";
+        document.getElementById("liveSub").textContent =
+          (latest.type || "") + " · " + (latest.detail || "") + " · " + (latest.rarity || "");
+        const known = document.getElementById("knownTag");
+        if (latest.knownAircraft && latest.catchCount > 0) {
+          known.hidden = false;
+          known.textContent = `Logged ${latest.catchCount} time(s) before`;
+        } else {
+          known.hidden = true;
+        }
+        renderRarity(stats.byRarity || {});
+        historyRows = history;
+        renderTable();
+        document.getElementById("liveSub").className = "sub";
+      } catch (e) {
+        document.getElementById("liveSub").textContent = "API error";
+        document.getElementById("liveSub").className = "sub err";
+      }
+    }
+    async function decodeHex() {
+      const btn = document.getElementById("decodeBtn");
+      const msg = document.getElementById("decodeMsg");
+      btn.disabled = true;
+      msg.textContent = "Looking up hex…";
+      try {
+        const res = await fetch("/api/decode", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ all: true }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.status);
+        msg.textContent = `Decoded ${data.decoded}, failed ${data.failed} (${data.pending} pending)`;
+        await refresh();
+      } catch (e) {
+        msg.textContent = `Decode failed: ${e.message}`;
+      }
+      btn.disabled = false;
+    }
+
+    function fillTable(tbodyId, rows, hexMode) {
+      const tbody = document.getElementById(tbodyId);
+      tbody.innerHTML = "";
+      for (const s of rows) {
+        const tr = document.createElement("tr");
+        const pin = s.gpsFix ? " · GPS" : "";
+        if (hexMode) {
+          const hex = (s.hex || s.displayCall || "—").toUpperCase();
+          const decoded = s.resolved
+            ? `${s.resolved}${s.operator ? " · " + s.operator : ""}`
+            : "—";
+          tr.innerHTML =
+            `<td>${fmtTs(s.ts)}</td>` +
+            `<td>${hex}</td>` +
+            `<td>${decoded}</td>` +
+            `<td><span class="tag ${s.rarity || "COMMON"}">${s.rarity || "?"}</span></td>`;
+        } else {
+          const call = s.callsign || "—";
+          tr.innerHTML =
+            `<td>${fmtTs(s.ts)}</td>` +
+            `<td>${call}</td>` +
+            `<td>${s.type || ""}${pin}</td>` +
+            `<td><span class="tag ${s.rarity || "COMMON"}">${s.rarity || "?"}</span></td>`;
+        }
+        tbody.appendChild(tr);
+      }
+      if (!rows.length) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td colspan="4">No entries.</td>`;
+        tbody.appendChild(tr);
+      }
+    }
+
+    function renderTable() {
+      document.getElementById("panelIdent").hidden = activeTab !== "ident";
+      document.getElementById("panelHex").hidden = activeTab !== "hex";
+      fillTable(
+        "rowsIdent",
+        historyRows.filter((s) => !s.hexOnly),
+        false
+      );
+      fillTable(
+        "rowsHex",
+        historyRows.filter((s) => s.hexOnly),
+        true
+      );
+    }
+
+    document.getElementById("tabIdent").onclick = () => {
+      activeTab = "ident";
+      document.getElementById("tabIdent").classList.add("active");
+      document.getElementById("tabHex").classList.remove("active");
+      renderTable();
+    };
+    document.getElementById("tabHex").onclick = () => {
+      activeTab = "hex";
+      document.getElementById("tabHex").classList.add("active");
+      document.getElementById("tabIdent").classList.remove("active");
+      renderTable();
+    };
+    document.getElementById("decodeBtn").onclick = decodeHex;
+
+    refresh();
+    setInterval(refresh, 5000);
+  </script>
+</body>
+</html>

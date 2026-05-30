@@ -43,6 +43,10 @@ release-pizero: push-pizero
 run-pizero-fake:
     cd apps/pizero2w && docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
 
+laptop-map:
+    @echo "http://127.0.0.1:8765/ — Breite/Länge, Pässe berechnen (Celestrak, kein Pi)"
+    python3 -m http.server 8765 --directory apps/laptop
+
 # --- Pi Zero (pull only — no docker compose build, no git clone && make) ---
 
 # to let the Pi install just:
@@ -91,6 +95,7 @@ update-on-pi:
     IP="$(hostname -I | awk '{print $1}')"
     echo ""
     echo "SIGLOG updated."
+    echo "  Log-UI: http://${IP}/"
     echo "  API:    http://${IP}/api/latest"
     echo "  Health: http://${IP}/api/health"
     echo "  WiFi:   siglog-net status"
@@ -106,3 +111,44 @@ net-hotspot:
 
 net-wifi:
     siglog-net wifi
+
+dedupe-pi:
+    docker exec siglog /app/scripts/dedupe-signals.sh /app/data/signals.db 30min
+
+pull-siglog-export PI_URL="http://192.168.0.6":
+    #!/usr/bin/env bash
+    set -eu
+    mkdir -p data/exports
+    out="data/exports/siglog-$(date -u +%Y%m%dT%H%M%SZ).json"
+    curl -fsSL "${PI_URL}/api/export" -o "$out"
+    echo "Saved $out ($(wc -c < "$out" | tr -d ' ') bytes)"
+
+push-siglog-export BRANCH="siglog-data":
+    #!/usr/bin/env bash
+    set -eu
+    if ! git rev-parse --git-dir >/dev/null 2>&1; then
+      echo "Not a git repo."
+      exit 1
+    fi
+    if [[ -z "$(ls -A data/exports/*.json 2>/dev/null)" ]]; then
+      echo "No data/exports/*.json — run: just pull-siglog-export"
+      exit 1
+    fi
+    git fetch origin 2>/dev/null || true
+    if git show-ref --verify --quiet "refs/heads/${BRANCH}"; then
+      git checkout "${BRANCH}"
+    else
+      git checkout -b "${BRANCH}"
+    fi
+    git add data/exports/*.json
+    if git diff --cached --quiet; then
+      echo "Nothing new to commit."
+      exit 0
+    fi
+    git commit -m "SIGLOG field export $(date -u +%Y-%m-%dT%H:%MZ)"
+    git push -u origin "${BRANCH}"
+    echo "Pushed branch ${BRANCH}"
+
+sync-siglog-github PI_URL="http://192.168.0.6" BRANCH="siglog-data":
+    just pull-siglog-export PI_URL={{PI_URL}}
+    just push-siglog-export BRANCH={{BRANCH}}

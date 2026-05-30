@@ -18,6 +18,7 @@ services:
       - SIGLOG_LAT=52.52
       - SIGLOG_LON=13.405
       - NOAA_NOTIFY_MINUTES=15
+      - LOG_COOLDOWN_SEC=1800
     volumes:
       - siglog_data:/app/data
       - /run/udev:/run/udev:ro

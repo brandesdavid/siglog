@@ -6,7 +6,19 @@ import logging
 import threading
 import random
 import gps
-from flask import Flask, jsonify
+from typing import Optional
+
+from flask import Flask, jsonify, request, send_from_directory
+
+from satellite_passes import passes_with_tracks
+from hex_lookup import (
+    all_lookups,
+    decode_all_pending,
+    decode_hex as lookup_decode_hex,
+    ensure_table as ensure_hex_table,
+    get_cached,
+    is_icao_hex,
+)
 
 DUMP1090_JSON = os.getenv("DUMP1090_JSON", "/app/data/dump1090/aircraft.json")
 API_PORT = int(os.getenv("API_PORT", 80))
@@ -14,6 +26,7 @@ DB_PATH = "/app/data/signals.db"
 SCHEDULER_STATE = "/app/data/scheduler_state.json"
 POSITION_PATH = "/app/data/position.json"
 POLL_INTERVAL = 2.0
+LOG_COOLDOWN_SEC = float(os.getenv("LOG_COOLDOWN_SEC", "1800"))
 FAKE_SIGNALS = os.getenv("FAKE_SIGNALS", "0") == "1"
 ENABLE_GPS = os.getenv("ENABLE_GPS", "auto")
 
@@ -22,6 +35,8 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
 log = logging.getLogger("siglog")
+
+WEB_DIR = os.path.join(os.path.dirname(__file__), "..", "web")
 
 app = Flask(__name__)
 
@@ -81,16 +96,68 @@ def init_db():
         """
     )
     con.commit()
+    cols = {r[1] for r in con.execute("PRAGMA table_info(signals)")}
+    if "gps_fix" not in cols:
+        con.execute(
+            "ALTER TABLE signals ADD COLUMN gps_fix INTEGER NOT NULL DEFAULT 0"
+        )
+        con.commit()
+    cols = {r[1] for r in con.execute("PRAGMA table_info(signals)")}
+    if "aircraft_key" not in cols:
+        con.execute("ALTER TABLE signals ADD COLUMN aircraft_key TEXT")
+        con.commit()
+    cols = {r[1] for r in con.execute("PRAGMA table_info(signals)")}
+    if "hex" not in cols:
+        con.execute("ALTER TABLE signals ADD COLUMN hex TEXT")
+        con.commit()
+    con.execute(
+        "UPDATE signals SET aircraft_key = callsign WHERE aircraft_key IS NULL"
+    )
+    con.execute(
+        "UPDATE signals SET hex = aircraft_key "
+        "WHERE hex IS NULL AND callsign = 'UNKNOWN' "
+        "AND length(aircraft_key) = 6"
+    )
+    con.commit()
     return con
 
 
 db_con = init_db()
+ensure_hex_table(db_con)
+EXPORT_DIR = "/app/data/exports"
+
+
+def icao_hex(ac: dict) -> str:
+    return (ac.get("hex") or "").strip().lower()
+
+
+def aircraft_key(ac: dict) -> str:
+    hex_id = icao_hex(ac)
+    if hex_id:
+        return hex_id
+    callsign = (ac.get("flight") or "").strip().upper()
+    return callsign or "UNKNOWN"
+
+
+def is_hex_only_row(callsign: str, hex_id: Optional[str], key: str) -> bool:
+    if callsign != "UNKNOWN":
+        return False
+    if hex_id and is_icao_hex(hex_id):
+        return True
+    return is_icao_hex(key or "")
+
+
+def catch_count(key: str) -> int:
+    row = db_con.execute(
+        "SELECT COUNT(*) FROM signals WHERE aircraft_key = ?", (key,)
+    ).fetchone()
+    return int(row[0]) if row else 0
 
 
 def log_signal(sig: dict):
     db_con.execute(
-        "INSERT INTO signals (ts,type,callsign,detail,rarity,lat,lng) "
-        "VALUES (?,?,?,?,?,?,?)",
+        "INSERT INTO signals (ts,type,callsign,detail,rarity,lat,lng,gps_fix,aircraft_key,hex) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?)",
         (
             int(time.time()),
             sig["type"],
@@ -99,6 +166,9 @@ def log_signal(sig: dict):
             sig["rarity"],
             sig.get("lat"),
             sig.get("lng"),
+            1 if sig.get("gpsFix") else 0,
+            sig.get("aircraftKey"),
+            sig.get("hex"),
         ),
     )
     db_con.commit()
@@ -152,6 +222,7 @@ def format_detail(ac: dict) -> str:
 
 last_callsign = ""
 last_noaa_key = ""
+last_logged_ts: dict[str, float] = {}
 
 
 def gps_enabled() -> bool:
@@ -207,25 +278,72 @@ def merge_scheduler_state() -> None:
                 state["rarity"] = "RARE"
 
 
+def should_log_aircraft(ac: dict) -> bool:
+    key = aircraft_key(ac)
+    now = time.time()
+    last = last_logged_ts.get(key)
+    if last is not None and now - last < LOG_COOLDOWN_SEC:
+        return False
+    row = db_con.execute(
+        "SELECT MAX(ts) FROM signals WHERE aircraft_key = ?", (key,)
+    ).fetchone()
+    if row and row[0] is not None and now - row[0] < LOG_COOLDOWN_SEC:
+        return False
+    last_logged_ts[key] = now
+    return True
+
+
 def apply_aircraft(best: dict):
     global last_callsign
 
     callsign = best.get("flight", "UNKNOWN").strip() or "UNKNOWN"
+    hex_id = icao_hex(best)
+    key = aircraft_key(best)
     rarity = best.get("_rarity", classify_rarity(best))
     detail = format_detail(best)
-    is_new = callsign != last_callsign
+    prev_catches = catch_count(key)
+    hex_only = is_hex_only_row(callsign, hex_id, key)
+    display_call = callsign
+    if hex_only and hex_id:
+        display_call = hex_id.upper()
 
     with state_lock:
         state["type"] = "ADS-B"
         state["callsign"] = callsign
+        state["displayCall"] = display_call
+        state["hex"] = hex_id or None
+        state["hexOnly"] = hex_only
         state["detail"] = detail
         state["rarity"] = rarity
+        state["aircraftKey"] = key
+        state["catchCount"] = prev_catches
+        state["knownAircraft"] = prev_catches > 0
+        gps_fix = bool(state.get("gpsLocked"))
+        lat = state.get("lat") if gps_fix else None
+        lng = state.get("lng") if gps_fix else None
 
-    if is_new:
+    if callsign == "UNKNOWN" and not hex_id:
+        return
+
+    if should_log_aircraft(best):
         last_callsign = callsign
-        sig = {**state, "lat": state.get("lat"), "lng": state.get("lng")}
-        log_signal(sig)
-        state["total"] = total_signals()
+        log_signal(
+            {
+                "type": "ADS-B",
+                "callsign": callsign,
+                "detail": detail,
+                "rarity": rarity,
+                "lat": lat,
+                "lng": lng,
+                "gpsFix": gps_fix,
+                "aircraftKey": key,
+                "hex": hex_id or None,
+            }
+        )
+        with state_lock:
+            state["total"] = total_signals()
+            state["catchCount"] = catch_count(key)
+            state["knownAircraft"] = True
         log.info("New signal: %s [%s] — %s", callsign, rarity, detail)
 
 
@@ -331,25 +449,201 @@ def api_latest():
         return jsonify(dict(state))
 
 
+def stats_dict() -> dict:
+    total = total_signals()
+    by_rarity = {
+        r[0]: r[1]
+        for r in db_con.execute(
+            "SELECT rarity, COUNT(*) FROM signals GROUP BY rarity"
+        ).fetchall()
+    }
+    by_type = {
+        r[0]: r[1]
+        for r in db_con.execute(
+            "SELECT type, COUNT(*) FROM signals GROUP BY type"
+        ).fetchall()
+    }
+    with_gps_fix = db_con.execute(
+        "SELECT COUNT(*) FROM signals WHERE gps_fix = 1"
+    ).fetchone()[0]
+    unique = db_con.execute(
+        "SELECT COUNT(DISTINCT COALESCE(aircraft_key, callsign)) FROM signals"
+    ).fetchone()[0]
+    hex_only = db_con.execute(
+        "SELECT COUNT(*) FROM signals WHERE callsign = 'UNKNOWN' "
+        "AND hex IS NOT NULL AND length(hex) = 6"
+    ).fetchone()[0]
+    decoded = db_con.execute("SELECT COUNT(*) FROM hex_lookup").fetchone()[0]
+    row = db_con.execute("SELECT MIN(ts), MAX(ts) FROM signals").fetchone()
+    return {
+        "total": total,
+        "withGpsFix": with_gps_fix,
+        "uniqueAircraft": unique,
+        "identified": total - hex_only,
+        "hexOnly": hex_only,
+        "hexDecoded": decoded,
+        "byRarity": by_rarity,
+        "byType": by_type,
+        "firstTs": row[0],
+        "lastTs": row[1],
+        "logCooldownSec": LOG_COOLDOWN_SEC,
+    }
+
+
+@app.route("/api/stats")
+def api_stats():
+    return jsonify(stats_dict())
+
+
+def lookup_fields(hex_id: str) -> dict:
+    if not hex_id or not is_icao_hex(hex_id):
+        return {}
+    row = get_cached(db_con, hex_id.lower())
+    if not row:
+        return {}
+    parts = [p for p in (row.get("registration"), row.get("aircraftType")) if p]
+    resolved = " · ".join(parts) if parts else None
+    return {
+        "resolved": resolved,
+        "registration": row.get("registration"),
+        "aircraftType": row.get("aircraftType"),
+        "operator": row.get("operator"),
+    }
+
+
 @app.route("/api/history")
 def api_history():
+    limit = min(int(request.args.get("limit", "100")), 500)
     rows = db_con.execute(
-        "SELECT ts,type,callsign,detail,rarity,lat,lng "
-        "FROM signals ORDER BY ts DESC LIMIT 100"
+        "SELECT ts,type,callsign,detail,rarity,lat,lng,gps_fix,aircraft_key,hex "
+        "FROM signals ORDER BY ts DESC LIMIT ?",
+        (limit,),
     ).fetchall()
-    signals = [
-        {
+    signals = []
+    for r in rows:
+        callsign = r[2]
+        hex_id = (r[9] or "").lower() if r[9] else ""
+        if not hex_id and is_icao_hex((r[8] or "")):
+            hex_id = (r[8] or "").lower()
+        hex_only = is_hex_only_row(callsign, hex_id, r[8] or "")
+        display = callsign
+        if hex_only and hex_id:
+            display = hex_id.upper()
+        item = {
             "ts": r[0],
             "type": r[1],
-            "callsign": r[2],
+            "callsign": callsign,
+            "displayCall": display,
+            "hex": hex_id or None,
+            "hexOnly": hex_only,
             "detail": r[3],
             "rarity": r[4],
             "lat": r[5],
             "lng": r[6],
+            "gpsFix": bool(r[7]),
         }
-        for r in rows
-    ]
+        item.update(lookup_fields(hex_id))
+        signals.append(item)
     return jsonify(signals)
+
+
+def build_export_payload() -> dict:
+    rows = db_con.execute(
+        "SELECT ts,type,callsign,detail,rarity,lat,lng,gps_fix,aircraft_key,hex "
+        "FROM signals ORDER BY ts ASC"
+    ).fetchall()
+    signals = []
+    for r in rows:
+        callsign = r[2]
+        hex_id = (r[9] or "").lower() if r[9] else ""
+        if not hex_id and is_icao_hex((r[8] or "")):
+            hex_id = (r[8] or "").lower()
+        hex_only = is_hex_only_row(callsign, hex_id, r[8] or "")
+        item = {
+            "ts": r[0],
+            "type": r[1],
+            "callsign": callsign,
+            "detail": r[3],
+            "rarity": r[4],
+            "lat": r[5],
+            "lng": r[6],
+            "gpsFix": bool(r[7]),
+            "aircraftKey": r[8],
+            "hex": hex_id or None,
+            "hexOnly": hex_only,
+        }
+        item.update(lookup_fields(hex_id))
+        signals.append(item)
+    return {
+        "version": 1,
+        "exportedAt": int(time.time()),
+        "stats": stats_dict(),
+        "signals": signals,
+        "hexLookup": all_lookups(db_con),
+    }
+
+
+@app.route("/api/decode", methods=["POST"])
+def api_decode():
+    body = request.get_json(silent=True) or {}
+    if body.get("all"):
+        return jsonify(decode_all_pending(db_con))
+    hex_id = (body.get("hex") or "").strip().lower()
+    if hex_id:
+        return jsonify(
+            lookup_decode_hex(db_con, hex_id, force=bool(body.get("force")))
+        )
+    return jsonify({"ok": False, "error": "send {\"all\": true} or {\"hex\": \"abcdef\"}"}), 400
+
+
+@app.route("/api/export")
+def api_export():
+    payload = build_export_payload()
+    os.makedirs(EXPORT_DIR, exist_ok=True)
+    path = os.path.join(EXPORT_DIR, "latest.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+    return jsonify(payload)
+
+
+@app.route("/")
+def web_home():
+    return send_from_directory(WEB_DIR, "index.html")
+
+
+@app.route("/api/map")
+def api_map():
+    merge_scheduler_state()
+    with state_lock:
+        lat = state.get("lat")
+        lng = state.get("lng")
+    if lat is None or lng is None:
+        lat = float(os.getenv("SIGLOG_LAT", "52.52"))
+        lng = float(os.getenv("SIGLOG_LON", "13.405"))
+    hours = float(request.args.get("hours", "48"))
+    min_el = float(request.args.get("minEl", os.getenv("NOAA_MIN_ELEVATION", "15")))
+    try:
+        passes = passes_with_tracks(lat, lng, hours=hours, min_el=min_el)
+    except Exception as e:
+        log.exception("api_map: %s", e)
+        passes = []
+    with state_lock:
+        latest = {
+            "type": state.get("type"),
+            "callsign": state.get("callsign"),
+            "detail": state.get("detail"),
+            "rarity": state.get("rarity"),
+            "total": state.get("total"),
+        }
+        message = state.get("schedulerMessage")
+    return jsonify(
+        {
+            "observer": {"lat": lat, "lng": lng},
+            "passes": passes,
+            "latest": latest,
+            "message": message,
+        }
+    )
 
 
 @app.route("/api/passes")

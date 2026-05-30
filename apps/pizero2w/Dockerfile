@@ -66,6 +66,9 @@ ENV DUMP1090_JSON=/app/data/dump1090/aircraft.json
 
 COPY --from=dump1090-build /src/dump1090/dump1090 /usr/bin/dump1090-fa
 COPY api/ /app/api/
+COPY web/ /app/web/
+COPY scripts/ /app/scripts/
+RUN chmod +x /app/scripts/*.sh
 COPY config/supervisord.conf /etc/supervisor/conf.d/siglog.conf
 COPY config/supervisord-no-gps.conf /etc/supervisor/conf.d/siglog-no-gps.conf
 COPY config/entrypoint.sh /entrypoint.sh

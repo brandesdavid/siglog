@@ -194,3 +194,36 @@ def next_pass(lat: float, lon: float, min_el: float = 15.0) -> Optional[Pass]:
         if p.los > now:
             return p
     return None
+
+
+def pass_ground_track(pass_obj: Pass, steps: int = 48) -> list[dict]:
+    ts, by_name = _load_satellites()
+    target = next((t for t in TARGETS if t.label == pass_obj.name), None)
+    if target is None:
+        return []
+    sat = _resolve_target(by_name, target)
+    if sat is None:
+        return []
+    t_aos = ts.from_datetime(pass_obj.aos)
+    t_los = ts.from_datetime(pass_obj.los)
+    points: list[dict] = []
+    for i in range(steps):
+        frac = i / max(steps - 1, 1)
+        t = t_aos + (t_los - t_aos) * frac
+        sub = sat.at(t).subpoint()
+        points.append(
+            {
+                "lat": round(float(sub.latitude.degrees), 5),
+                "lng": round(float(sub.longitude.degrees), 5),
+            }
+        )
+    return points
+
+
+def passes_with_tracks(lat: float, lon: float, hours: float = 48, min_el: float = 15.0) -> list[dict]:
+    out = []
+    for p in predict_passes(lat, lon, hours=hours, min_el=min_el):
+        d = p.to_dict()
+        d["track"] = pass_ground_track(p)
+        out.append(d)
+    return out
