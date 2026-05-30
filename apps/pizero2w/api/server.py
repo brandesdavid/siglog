@@ -37,6 +37,7 @@ from manual_capture import (
     supervisorctl,
 )
 from log_reader import read_logs
+from storage_stats import storage_stats
 from fm_radio import (
     read_radio_state,
     radio_busy,
@@ -848,6 +849,7 @@ def api_control_status():
             "radio": radio,
             "radioBusy": radio_busy(),
             "captures": list_captures(),
+            "storage": storage_stats(),
             "hostResult": host_text,
             "scheduler": sched,
             "system": system,

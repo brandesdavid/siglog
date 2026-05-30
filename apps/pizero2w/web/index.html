@@ -310,6 +310,29 @@
     }
     .cap-list { padding: 8px 10px; font-size: 11px; }
     .cap-list a { color: var(--ink); }
+    .storage-panel {
+      padding: 10px;
+      border-top: 2px solid var(--line);
+      background: var(--paper);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+    .storage-panel.warn { background: #fff8f0; border-top-color: #c84; }
+    .storage-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px 12px;
+      margin-bottom: 8px;
+    }
+    .storage-grid b {
+      display: block;
+      font-size: 15px;
+      margin-top: 2px;
+    }
+    .storage-hint {
+      font-size: 10px;
+      color: var(--muted);
+    }
     .log-toolbar {
       display: flex;
       flex-wrap: wrap;
@@ -890,6 +913,15 @@
           </div>
           <div class="ctrl-status" id="ctrlStatus">—</div>
           <div class="cap-list" id="capList"></div>
+          <div class="storage-panel" id="storagePanel">
+            <div class="storage-grid">
+              <div><span>SD free</span><b id="storageFree">—</b></div>
+              <div><span>SIGLOG data</span><b id="storageData">—</b></div>
+              <div><span>Captures</span><b id="storageCaptures">—</b></div>
+              <div><span>SQLite log</span><b id="storageDb">—</b></div>
+            </div>
+            <div class="storage-hint" id="storageHint">—</div>
+          </div>
           <div class="ctrl-note">WiFi buttons need host watcher: <code>siglog-host-control</code> on the Pi.</div>
         </div>
         <div class="settings-pane" id="setPaneTiers">
@@ -1214,6 +1246,36 @@
       }
     }
 
+    function fmtBytes(n) {
+      if (n == null || Number.isNaN(n)) return "—";
+      const u = ["B", "KB", "MB", "GB", "TB"];
+      let v = Number(n);
+      let i = 0;
+      while (v >= 1024 && i < u.length - 1) {
+        v /= 1024;
+        i += 1;
+      }
+      return `${v < 10 && i > 0 ? v.toFixed(1) : Math.round(v)} ${u[i]}`;
+    }
+
+    function renderStorage(storage) {
+      const panel = document.getElementById("storagePanel");
+      if (!storage || !panel) return;
+      document.getElementById("storageFree").textContent =
+        `${fmtBytes(storage.diskFree)} (${storage.freePct}%)`;
+      document.getElementById("storageData").textContent = fmtBytes(storage.dataBytes);
+      document.getElementById("storageCaptures").textContent =
+        `${fmtBytes(storage.capturesBytes)} · ${storage.capturesCount} files`;
+      document.getElementById("storageDb").textContent = fmtBytes(storage.dbBytes);
+      panel.classList.toggle("warn", !!storage.warnLow);
+      const est10 = storage.estimateMeteor10MinMb;
+      const est15 = storage.estimateMeteor15MinMb;
+      const hint = document.getElementById("storageHint");
+      hint.textContent = storage.warnLow
+        ? `Low space — delete old WAVs in Captures above. One Meteor LRPT pass ≈ ${est10} MB (10 min) to ${est15} MB (15 min).`
+        : `Meteor LRPT WAV ≈ ${est10} MB per 10 min · up to ${est15} MB for max pass (48 kHz mono).`;
+    }
+
     function syncCtrlFeedback(text) {
       document.getElementById("ctrlStatus").textContent = text;
       const cc = document.getElementById("consoleCtrlStatus");
@@ -1504,6 +1566,7 @@
           .slice(0, 8)
           .map((c) => `<a href="${c.url}">${c.name}</a> (${Math.round(c.size / 1024)} KB)`)
           .join(" · ") || "No captures yet.";
+        renderStorage(data.storage);
       } catch (e) {
         syncCtrlFeedback("Control API error");
       }
