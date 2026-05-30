@@ -552,6 +552,34 @@
       color: var(--muted);
       line-height: 1.4;
     }
+    .focus-log-preview {
+      border-top: 2px solid var(--line);
+      background: var(--scan);
+    }
+    .focus-log-preview[hidden] { display: none !important; }
+    .focus-log-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px 10px;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      border-bottom: 1px solid var(--line-light);
+    }
+    .focus-log-head .btn {
+      flex: 0 0 auto;
+      min-width: 0;
+      padding: 4px 10px;
+      font-size: 10px;
+    }
+    .focus-log-preview .log-view {
+      max-height: min(200px, 28vh);
+      margin: 0;
+      border: none;
+    }
     .signal-panel {
       width: 100%;
       padding: 10px;
@@ -1051,6 +1079,13 @@
           <button type="button" class="btn secondary" id="focusStop">Stop</button>
           <div class="focus-cap-status" id="focusCapStatus">LRPT raw WAV · ADS-B pauses during capture · decode at home</div>
         </div>
+        <div class="focus-log-preview" id="focusLogPreview" hidden>
+          <div class="focus-log-head">
+            <span id="focusLogTitle">Capture log</span>
+            <button type="button" class="btn secondary" id="focusLogClose">Close</button>
+          </div>
+          <pre class="log-view" id="focusLogView"></pre>
+        </div>
       </div>
     </div>
   </div>
@@ -1136,6 +1171,46 @@
           btn.textContent = prev || "Check 5s";
         }
         refreshControl();
+      }
+    }
+
+    let focusLogStickBottom = true;
+    let focusLogPoll = null;
+    let focusCaptureWasActive = false;
+
+    function openFocusLogPreview() {
+      const panel = document.getElementById("focusLogPreview");
+      if (!panel) return;
+      panel.hidden = false;
+      focusLogStickBottom = true;
+      refreshFocusLogs();
+      if (focusLogPoll) clearInterval(focusLogPoll);
+      focusLogPoll = setInterval(refreshFocusLogs, 2000);
+    }
+
+    function closeFocusLogPreview() {
+      const panel = document.getElementById("focusLogPreview");
+      if (panel) panel.hidden = true;
+      if (focusLogPoll) {
+        clearInterval(focusLogPoll);
+        focusLogPoll = null;
+      }
+    }
+
+    async function refreshFocusLogs() {
+      const panel = document.getElementById("focusLogPreview");
+      if (!panel || panel.hidden) return;
+      try {
+        const data = await fetch("/api/logs?service=all&lines=120").then((r) => r.json());
+        const el = document.getElementById("focusLogView");
+        const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+        el.textContent = (data.lines || []).join("\n");
+        if (focusLogStickBottom || atBottom) {
+          el.scrollTop = el.scrollHeight;
+          focusLogStickBottom = true;
+        }
+      } catch (e) {
+        document.getElementById("focusLogView").textContent = "Log fetch failed";
       }
     }
 
@@ -1378,7 +1453,12 @@
     async function refreshControl() {
       try {
         const data = await fetch("/api/control/status").then((r) => r.json());
+        const wasActive = focusCaptureWasActive;
         lastCaptureState = data.capture;
+        focusCaptureWasActive = !!data.capture?.active;
+        if (wasActive && !focusCaptureWasActive && !document.getElementById("viewFocus").hidden) {
+          closeFocusLogPreview();
+        }
         updateSystemMode(data.system);
         if (data.system?.wifi === "unknown" && !wifiStatusQueued) {
           wifiStatusQueued = true;
@@ -1404,6 +1484,14 @@
         }
         paintSignalMeter("focus", data.capture);
         paintSignalMeter("ctrl", data.capture);
+        if (!document.getElementById("focusLogPreview").hidden && data.capture?.active) {
+          const title = document.getElementById("focusLogTitle");
+          if (title) {
+            title.textContent = data.capture.message
+              ? `Capture log · ${data.capture.message}`
+              : "Capture log";
+          }
+        }
         if (data.scheduler?.nextPass) {
           const p = data.scheduler.nextPass;
           lines.push(`Next pass: ${p.name} in ${p.startInMin} min`);
@@ -1566,13 +1654,14 @@
 
     async function startFocusCapture() {
       if (focusIdx === null) return;
-      openSettingsConsole();
       const st = document.getElementById("focusCapStatus");
       st.textContent = "Starting…";
       try {
         const data = await controlPost("/api/control/capture", { passIndex: focusIdx });
         if (!data.ok) throw new Error(data.error || "Capture failed");
         st.textContent = data.message || "Recording started";
+        openFocusLogPreview();
+        focusCaptureWasActive = true;
         refreshControl();
         updateFocusCaptureUi();
       } catch (e) {
@@ -1581,11 +1670,12 @@
     }
 
     async function stopFocusCapture() {
-      openSettingsConsole();
       const st = document.getElementById("focusCapStatus");
       try {
         const d = await controlPost("/api/control/stop");
         st.textContent = d.message || "Stopped";
+        closeFocusLogPreview();
+        focusCaptureWasActive = false;
         refreshControl();
         updateFocusCaptureUi();
       } catch (e) {
@@ -2206,6 +2296,11 @@
     document.getElementById("focusBack").onclick = () => showMainView("plan");
     document.getElementById("focusRecord").onclick = startFocusCapture;
     document.getElementById("focusStop").onclick = stopFocusCapture;
+    document.getElementById("focusLogClose").onclick = closeFocusLogPreview;
+    document.getElementById("focusLogView").onscroll = (e) => {
+      const el = e.target;
+      focusLogStickBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    };
     document.getElementById("planFetch").onclick = fetchPlanPasses;
 
     refresh();
