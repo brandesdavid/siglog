@@ -4,10 +4,38 @@ default:
 # --- Mac (never build on the Pi) ---
 
 build-pizero:
-    DOCKER_BUILDKIT=1 docker buildx build --platform linux/arm64 -f apps/pizero2w/Dockerfile -t ghcr.io/brandesdavid/siglog-pi:latest --load apps/pizero2w
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export DOCKER_BUILDKIT=1
+    for n in 1 2 3; do
+      echo "=== build-pizero attempt ${n}/3 ==="
+      if docker buildx build --platform linux/arm64 \
+        -f apps/pizero2w/Dockerfile \
+        -t ghcr.io/brandesdavid/siglog-pi:latest \
+        --load apps/pizero2w; then
+        exit 0
+      fi
+      sleep 15
+    done
+    echo "Build failed after 3 attempts. Check Docker Desktop network / VPN, then retry."
+    exit 1
 
 push-pizero:
-    DOCKER_BUILDKIT=1 docker buildx build --platform linux/arm64 -f apps/pizero2w/Dockerfile -t ghcr.io/brandesdavid/siglog-pi:latest --push apps/pizero2w
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export DOCKER_BUILDKIT=1
+    for n in 1 2 3; do
+      echo "=== push-pizero attempt ${n}/3 ==="
+      if docker buildx build --platform linux/arm64 \
+        -f apps/pizero2w/Dockerfile \
+        -t ghcr.io/brandesdavid/siglog-pi:latest \
+        --push apps/pizero2w; then
+        exit 0
+      fi
+      sleep 15
+    done
+    echo "Push failed after 3 attempts. Check Docker Desktop network / VPN, then retry."
+    exit 1
 
 release-pizero: push-pizero
     @echo "Image pushed. On the Pi run:  just update-on-pi"
