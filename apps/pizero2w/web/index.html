@@ -37,7 +37,22 @@
       display: flex;
       justify-content: space-between;
       align-items: center;
+      gap: 10px;
       margin-bottom: 10px;
+    }
+    .bar-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex: 1;
+      justify-content: flex-end;
+      min-width: 0;
+    }
+    .bar .btn.header-btn {
+      padding: 8px 12px;
+      font-size: 11px;
+      white-space: nowrap;
+      flex-shrink: 0;
     }
     .bar h1 {
       font-size: 18px;
@@ -49,8 +64,8 @@
       text-transform: uppercase;
       color: var(--muted);
       text-align: right;
-      max-width: 55%;
       line-height: 1.35;
+      min-width: 0;
     }
     .mode-strip {
       display: flex;
@@ -537,6 +552,64 @@
       color: var(--muted);
       line-height: 1.4;
     }
+    .settings-tabs {
+      display: flex;
+      border-bottom: 2px solid var(--line);
+      background: var(--scan);
+    }
+    .settings-tab {
+      flex: 1;
+      padding: 10px 8px;
+      border: none;
+      border-right: 2px solid var(--line);
+      background: var(--scan);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      cursor: pointer;
+      color: var(--muted);
+    }
+    .settings-tab:last-child { border-right: none; }
+    .settings-tab.active {
+      background: var(--paper);
+      color: var(--ink);
+    }
+    .settings-pane { display: none; padding: 0; }
+    .settings-pane.active { display: block; }
+    .tier-block {
+      padding: 10px;
+      border-bottom: 1px solid var(--line-light);
+    }
+    .tier-block:last-child { border-bottom: none; }
+    .tier-block h3 {
+      font-size: 12px;
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .tier-block p, .tier-block ul {
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+    .tier-block ul { margin: 6px 0 0 16px; }
+    .console-ctrl {
+      padding: 8px 10px;
+      font-size: 11px;
+      font-family: "Courier New", Courier, monospace;
+      white-space: pre-wrap;
+      border-bottom: 2px solid var(--line);
+      background: var(--accent);
+      max-height: 88px;
+      overflow-y: auto;
+    }
+    .log-view.tall {
+      max-height: min(420px, 55vh);
+    }
+    @media (max-width: 520px) {
+      .bar .mode { display: none; }
+    }
     @media (max-width: 720px) {
       .plan-layout { grid-template-columns: 1fr; }
       #planMap { border-right: none; border-bottom: 2px solid var(--line); min-height: 280px; }
@@ -549,9 +622,12 @@
   <div class="wrap" id="wrap">
     <div class="bar">
       <h1>SIGLOG</h1>
-      <span class="mode" id="modeLine">—</span>
+      <div class="bar-right">
+        <span class="mode" id="modeLine">—</span>
+        <button type="button" class="btn header-btn" id="navSettings">Controls</button>
+      </div>
     </div>
-    <div class="main-tabs">
+    <div class="main-tabs" id="mainTabs">
       <button type="button" class="main-tab active" id="navLog">Log</button>
       <button type="button" class="main-tab" id="navPlan">Plan</button>
       <button type="button" class="main-tab" id="navFocus" disabled>Focus</button>
@@ -614,55 +690,122 @@
         </div>
       </div>
     </div>
-    <div class="panel">
-      <div class="panel-h">Controls</div>
-      <div class="mode-strip">
-        <span class="mode-pill on" id="pillSignal">ADS-B</span>
-        <span class="mode-pill" id="pillWifi">WiFi unknown</span>
-        <span class="mode-pill ok" id="pillGps" hidden>GPS</span>
-      </div>
-      <div class="hex-note">
-        LRPT decode is heavy on Pi Zero — record raw WAV here, decode at home (SatDump).
-        Recording stops ADS-B for the duration.
-      </div>
-      <div class="ctrl-grid">
-        <button type="button" class="btn" id="capLrpt1379">LRPT raw 10 min · 137.9 MHz</button>
-        <button type="button" class="btn" id="capLrpt1371">LRPT raw 10 min · 137.1 MHz</button>
-        <button type="button" class="btn secondary" id="capAptRaw">FM raw 10 min · 137.1 MHz</button>
-        <button type="button" class="btn secondary" id="capAptDecode">APT record + decode 10 min</button>
-        <button type="button" class="btn secondary" id="capStop">Stop recording</button>
-        <button type="button" class="btn secondary" id="restartAds">Restart ADS-B</button>
-      </div>
-      <div class="ctrl-grid">
-        <button type="button" class="btn secondary" id="hostStatus">WiFi status</button>
-        <button type="button" class="btn secondary" id="hostHotspot">Hotspot on</button>
-        <button type="button" class="btn secondary" id="hostWifi">Home WiFi</button>
-        <button type="button" class="btn secondary" id="hostAuto">WiFi auto</button>
-      </div>
-      <div class="ctrl-status" id="ctrlStatus">—</div>
-      <div class="cap-list" id="capList"></div>
-      <div class="ctrl-note">WiFi buttons need host watcher: <code>siglog-host-control</code> service on the Pi.</div>
-    </div>
-    <div class="panel">
-      <div class="panel-h">Logs</div>
-      <div class="log-toolbar">
-        <select id="logService">
-          <option value="all">All services</option>
-          <option value="api">API</option>
-          <option value="dump1090">dump1090</option>
-          <option value="scheduler">Scheduler</option>
-          <option value="gpsd">gpsd</option>
-        </select>
-        <button type="button" class="btn secondary" id="logRefresh">Refresh</button>
-        <span class="decode-msg" id="logMeta"></span>
-      </div>
-      <pre class="log-view" id="logView">Loading…</pre>
-    </div>
     <p class="foot">
       Same aircraft logged at most once per 30 min.
       <a href="/api/export" download="siglog-export.json">Download JSON</a>
-      · Mac: <code>just sync-siglog-github</code>
     </p>
+    </div>
+    <div id="viewSettings" hidden>
+      <div class="panel">
+        <div class="settings-tabs">
+          <button type="button" class="settings-tab active" id="setTabControls">Controls</button>
+          <button type="button" class="settings-tab" id="setTabTiers">Tiers</button>
+          <button type="button" class="settings-tab" id="setTabConsole">Console</button>
+        </div>
+        <div class="settings-pane active" id="setPaneControls">
+          <div class="mode-strip">
+            <span class="mode-pill on" id="pillSignal">ADS-B</span>
+            <span class="mode-pill" id="pillWifi">WiFi unknown</span>
+            <span class="mode-pill ok" id="pillGps" hidden>GPS</span>
+          </div>
+          <div class="hex-note">
+            LRPT decode is heavy on Pi Zero — record raw WAV, decode at home (SatDump).
+            Recording stops ADS-B for the duration.
+          </div>
+          <div class="ctrl-grid">
+            <button type="button" class="btn" id="capLrpt1379">LRPT raw 10 min · 137.9 MHz</button>
+            <button type="button" class="btn" id="capLrpt1371">LRPT raw 10 min · 137.1 MHz</button>
+            <button type="button" class="btn secondary" id="capAptRaw">FM raw 10 min · 137.1 MHz</button>
+            <button type="button" class="btn secondary" id="capAptDecode">APT record + decode 10 min</button>
+            <button type="button" class="btn secondary" id="capStop">Stop recording</button>
+            <button type="button" class="btn secondary" id="restartAds">Restart ADS-B</button>
+          </div>
+          <div class="ctrl-grid">
+            <button type="button" class="btn secondary" id="hostStatus">WiFi status</button>
+            <button type="button" class="btn secondary" id="hostHotspot">Hotspot on</button>
+            <button type="button" class="btn secondary" id="hostWifi">Home WiFi</button>
+            <button type="button" class="btn secondary" id="hostAuto">WiFi auto</button>
+          </div>
+          <div class="ctrl-status" id="ctrlStatus">—</div>
+          <div class="cap-list" id="capList"></div>
+          <div class="ctrl-note">WiFi buttons need host watcher: <code>siglog-host-control</code> on the Pi.</div>
+        </div>
+        <div class="settings-pane" id="setPaneTiers">
+          <div class="tier-block">
+            <h3><span class="tag LEGEND">Legend</span> ADS-B live</h3>
+            <ul>
+              <li>Emergency squawk 7500 / 7600 / 7700</li>
+              <li>Interceptor squawk 7777</li>
+              <li>No hex and no callsign</li>
+            </ul>
+          </div>
+          <div class="tier-block">
+            <h3><span class="tag LEGEND">Legend</span> After hex decode</h3>
+            <ul>
+              <li>Concorde (CONC), Antonov An-225, Stargazer N140SC</li>
+            </ul>
+          </div>
+          <div class="tier-block">
+            <h3><span class="tag EPIC">Epic</span> ADS-B live</h3>
+            <ul>
+              <li>Callsign but no ICAO hex</li>
+              <li>Military callsign prefixes (GAF, RAF, USAF, …)</li>
+              <li>NATO / MAGIC AWACS callsigns</li>
+            </ul>
+          </div>
+          <div class="tier-block">
+            <h3><span class="tag EPIC">Epic</span> After decode · Satellites</h3>
+            <ul>
+              <li>Military aircraft types (E-3, RC-135, B-52, B-2, P-8, C-17, …)</li>
+              <li>Military operator in registry</li>
+              <li>USA-xxx catalog objects</li>
+            </ul>
+          </div>
+          <div class="tier-block">
+            <h3><span class="tag RARE">Rare</span></h3>
+            <ul>
+              <li>A380, B747-8, Beluga, warbirds, IL-76, government/police operators</li>
+              <li>Airbus test registrations F-WW…</li>
+            </ul>
+          </div>
+          <div class="tier-block">
+            <h3><span class="tag UNCOMMON">Uncommon</span></h3>
+            <ul>
+              <li>GA types (C172, DV20, gliders), US N-registrations</li>
+              <li>Business jets (Gulfstream, Challenger, Learjet)</li>
+              <li>Older narrowbodies (B752, MD-80)</li>
+              <li>Meteor-M LRPT passes (METEOR log type)</li>
+            </ul>
+          </div>
+          <div class="tier-block">
+            <h3><span class="tag COMMON">Common</span></h3>
+            <ul>
+              <li>Identified airline traffic, hex-only rows before decode</li>
+              <li>After decode: most Lufthansa, Ryanair, Buzz, easyJet, …</li>
+              <li>NOAA APT passes (legacy satellites)</li>
+            </ul>
+          </div>
+          <div class="tier-block">
+            <h3>Hex decode</h3>
+            <p>Decode on the Hex tab (home Wi‑Fi). Rarity is recalculated from registration, operator, and type. Stored in SQLite on the Pi.</p>
+          </div>
+        </div>
+        <div class="settings-pane" id="setPaneConsole">
+          <div class="console-ctrl" id="consoleCtrlStatus">—</div>
+          <div class="log-toolbar">
+            <select id="logService">
+              <option value="all">All services</option>
+              <option value="api">API</option>
+              <option value="dump1090">dump1090</option>
+              <option value="scheduler">Scheduler</option>
+              <option value="gpsd">gpsd</option>
+            </select>
+            <button type="button" class="btn secondary" id="logRefresh">Refresh</button>
+            <span class="decode-msg" id="logMeta"></span>
+          </div>
+          <pre class="log-view tall" id="logView">Loading…</pre>
+        </div>
+      </div>
     </div>
     <div id="viewPlan" hidden>
       <div class="panel">
@@ -739,6 +882,35 @@
     let pageHex = 1;
     let historyIdent = { items: [], total: 0, totalPages: 1 };
     let historyHex = { items: [], total: 0, totalPages: 1 };
+    let lastMainView = "log";
+    let settingsTab = "controls";
+
+    function syncCtrlFeedback(text) {
+      document.getElementById("ctrlStatus").textContent = text;
+      const cc = document.getElementById("consoleCtrlStatus");
+      if (cc) cc.textContent = text;
+    }
+
+    function showSettingsTab(tab) {
+      settingsTab = tab;
+      for (const t of ["controls", "tiers", "console"]) {
+        document.getElementById(`setTab${t[0].toUpperCase()}${t.slice(1)}`).classList.toggle(
+          "active", t === tab
+        );
+        document.getElementById(`setPane${t[0].toUpperCase()}${t.slice(1)}`).classList.toggle(
+          "active", t === tab
+        );
+      }
+      if (tab === "console") {
+        logStickBottom = true;
+        refreshLogs();
+      }
+    }
+
+    function openSettingsConsole() {
+      showMainView("settings");
+      showSettingsTab("console");
+    }
 
     function fmtTs(ts) {
       return new Date(ts * 1000).toLocaleString("en-US", {
@@ -971,29 +1143,31 @@
           lines.push(`Next pass: ${p.name} in ${p.startInMin} min`);
         }
         if (data.hostResult) lines.push("WiFi:\n" + data.hostResult);
-        document.getElementById("ctrlStatus").textContent = lines.join("\n") || "Idle";
+        const statusText = lines.join("\n") || "Idle";
+        syncCtrlFeedback(statusText);
         const cl = document.getElementById("capList");
         cl.innerHTML = (data.captures || [])
           .slice(0, 8)
           .map((c) => `<a href="${c.url}">${c.name}</a> (${Math.round(c.size / 1024)} KB)`)
           .join(" · ") || "No captures yet.";
       } catch (e) {
-        document.getElementById("ctrlStatus").textContent = "Control API error";
+        syncCtrlFeedback("Control API error");
       }
     }
 
     async function runCapture(preset, decodeApt) {
-      document.getElementById("ctrlStatus").textContent = "Starting…";
+      syncCtrlFeedback("Starting…");
+      openSettingsConsole();
       try {
         const data = await controlPost("/api/control/capture", {
           preset,
           durationSec: 600,
           decodeApt: !!decodeApt,
         });
-        document.getElementById("ctrlStatus").textContent = data.message || "Started";
+        syncCtrlFeedback(data.message || "Started");
         refreshControl();
       } catch (e) {
-        document.getElementById("ctrlStatus").textContent = e.message;
+        syncCtrlFeedback(e.message);
       }
     }
 
@@ -1002,31 +1176,35 @@
     document.getElementById("capAptRaw").onclick = () => runCapture("apt1371");
     document.getElementById("capAptDecode").onclick = () => runCapture("apt1371", true);
     document.getElementById("capStop").onclick = async () => {
+      openSettingsConsole();
       try {
         const d = await controlPost("/api/control/stop");
-        document.getElementById("ctrlStatus").textContent = d.message || "Stopped";
+        syncCtrlFeedback(d.message || "Stopped");
         refreshControl();
       } catch (e) {
-        document.getElementById("ctrlStatus").textContent = e.message;
+        syncCtrlFeedback(e.message);
       }
     };
     document.getElementById("restartAds").onclick = async () => {
+      openSettingsConsole();
       try {
         const d = await controlPost("/api/control/restart", { target: "dump1090" });
-        document.getElementById("ctrlStatus").textContent = d.ok ? "ADS-B restarted" : d.stderr;
+        syncCtrlFeedback(d.ok ? "ADS-B restarted" : d.stderr);
+        refreshLogs();
       } catch (e) {
-        document.getElementById("ctrlStatus").textContent = e.message;
+        syncCtrlFeedback(e.message);
       }
     };
     async function hostCmd(cmd) {
-      document.getElementById("ctrlStatus").textContent = `Queued ${cmd}…`;
+      syncCtrlFeedback(`Queued ${cmd}…`);
+      openSettingsConsole();
       try {
         await controlPost("/api/control/host", { cmd });
         for (const delay of [1500, 4000, 8000]) {
           setTimeout(refreshControl, delay);
         }
       } catch (e) {
-        document.getElementById("ctrlStatus").textContent = e.message;
+        syncCtrlFeedback(e.message);
       }
     }
     document.getElementById("hostStatus").onclick = () => hostCmd("status");
@@ -1117,6 +1295,7 @@
 
     async function startFocusCapture() {
       if (focusIdx === null) return;
+      openSettingsConsole();
       const st = document.getElementById("focusCapStatus");
       st.textContent = "Starting…";
       try {
@@ -1131,6 +1310,7 @@
     }
 
     async function stopFocusCapture() {
+      openSettingsConsole();
       const st = document.getElementById("focusCapStatus");
       try {
         const d = await controlPost("/api/control/stop");
@@ -1468,13 +1648,22 @@
     function showMainView(view) {
       const isPlan = view === "plan";
       const isFocus = view === "focus";
-      document.getElementById("viewLog").hidden = isPlan || isFocus;
+      const isSettings = view === "settings";
+      if (!isSettings) lastMainView = view;
+      document.getElementById("viewLog").hidden = isPlan || isFocus || isSettings;
       document.getElementById("viewPlan").hidden = !isPlan;
       document.getElementById("viewFocus").hidden = !isFocus;
+      document.getElementById("viewSettings").hidden = !isSettings;
+      document.getElementById("mainTabs").hidden = isSettings;
       document.getElementById("navLog").classList.toggle("active", view === "log");
       document.getElementById("navPlan").classList.toggle("active", isPlan);
       document.getElementById("navFocus").classList.toggle("active", isFocus);
+      document.getElementById("navSettings").textContent = isSettings ? "← Log" : "Controls";
       document.getElementById("wrap").classList.toggle("wide", isPlan || isFocus);
+      if (isSettings) {
+        refreshControl();
+        if (settingsTab === "console") refreshLogs();
+      }
       if (isPlan) {
         initPlanMap();
         if (!planData) loadPlanFromPi();
@@ -1492,6 +1681,16 @@
 
     document.getElementById("navLog").onclick = () => showMainView("log");
     document.getElementById("navPlan").onclick = () => showMainView("plan");
+    document.getElementById("navSettings").onclick = () => {
+      if (document.getElementById("viewSettings").hidden) {
+        showMainView("settings");
+      } else {
+        showMainView(lastMainView);
+      }
+    };
+    document.getElementById("setTabControls").onclick = () => showSettingsTab("controls");
+    document.getElementById("setTabTiers").onclick = () => showSettingsTab("tiers");
+    document.getElementById("setTabConsole").onclick = () => showSettingsTab("console");
     document.getElementById("navFocus").onclick = () => {
       if (focusIdx === null && planData?.passes?.length) focusIdx = 0;
       showMainView("focus");
@@ -1506,7 +1705,11 @@
     refreshLogs();
     setInterval(refreshLive, 5000);
     setInterval(refreshControl, 5000);
-    setInterval(refreshLogs, 5000);
+    setInterval(() => {
+      if (!document.getElementById("viewSettings").hidden && settingsTab === "console") {
+        refreshLogs();
+      }
+    }, 5000);
   </script>
 </body>
 </html>
