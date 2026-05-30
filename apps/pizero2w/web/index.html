@@ -221,6 +221,43 @@
     .decode-msg { font-size: 11px; color: var(--muted); flex: 1; min-width: 120px; }
     .subline { font-size: 10px; color: var(--muted); margin-top: 2px; }
     .foot a { color: var(--ink); }
+    .pager {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 10px;
+      border-top: 2px solid var(--line);
+      background: var(--scan);
+      font-size: 11px;
+    }
+    .pager .info { color: var(--muted); font-weight: 700; text-transform: uppercase; }
+    .pager .nav { display: flex; gap: 6px; }
+    .ctrl-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      padding: 10px;
+    }
+    .ctrl-grid .btn { width: 100%; text-align: center; }
+    .ctrl-note {
+      padding: 8px 10px;
+      font-size: 11px;
+      color: var(--muted);
+      border-top: 1px solid var(--line-light);
+    }
+    .ctrl-status {
+      padding: 8px 10px;
+      font-size: 11px;
+      font-family: "Courier New", Courier, monospace;
+      white-space: pre-wrap;
+      border-top: 1px solid var(--line-light);
+      max-height: 120px;
+      overflow-y: auto;
+    }
+    .cap-list { padding: 8px 10px; font-size: 11px; }
+    .cap-list a { color: var(--ink); }
   </style>
 </head>
 <body>
@@ -255,6 +292,13 @@
           </thead>
           <tbody id="rowsIdent"></tbody>
         </table>
+        <div class="pager">
+          <span class="info" id="pagerIdentInfo">Page 1</span>
+          <div class="nav">
+            <button type="button" class="btn secondary" id="prevIdent">Prev</button>
+            <button type="button" class="btn secondary" id="nextIdent">Next</button>
+          </div>
+        </div>
       </div>
       <div id="panelHex" hidden>
         <div class="hex-note">
@@ -270,7 +314,38 @@
           </thead>
           <tbody id="rowsHex"></tbody>
         </table>
+        <div class="pager">
+          <span class="info" id="pagerHexInfo">Page 1</span>
+          <div class="nav">
+            <button type="button" class="btn secondary" id="prevHex">Prev</button>
+            <button type="button" class="btn secondary" id="nextHex">Next</button>
+          </div>
+        </div>
       </div>
+    </div>
+    <div class="panel">
+      <div class="panel-h">Controls</div>
+      <div class="hex-note">
+        LRPT decode is heavy on Pi Zero — record raw WAV here, decode at home (SatDump).
+        Recording stops ADS-B for the duration.
+      </div>
+      <div class="ctrl-grid">
+        <button type="button" class="btn" id="capLrpt1379">LRPT raw 10 min · 137.9 MHz</button>
+        <button type="button" class="btn" id="capLrpt1371">LRPT raw 10 min · 137.1 MHz</button>
+        <button type="button" class="btn secondary" id="capAptRaw">FM raw 10 min · 137.1 MHz</button>
+        <button type="button" class="btn secondary" id="capAptDecode">APT record + decode 10 min</button>
+        <button type="button" class="btn secondary" id="capStop">Stop recording</button>
+        <button type="button" class="btn secondary" id="restartAds">Restart ADS-B</button>
+      </div>
+      <div class="ctrl-grid">
+        <button type="button" class="btn secondary" id="hostStatus">WiFi status</button>
+        <button type="button" class="btn secondary" id="hostHotspot">Hotspot on</button>
+        <button type="button" class="btn secondary" id="hostWifi">Home WiFi</button>
+        <button type="button" class="btn secondary" id="hostAuto">WiFi auto</button>
+      </div>
+      <div class="ctrl-status" id="ctrlStatus">—</div>
+      <div class="cap-list" id="capList"></div>
+      <div class="ctrl-note">WiFi buttons need host watcher: <code>siglog-host-control</code> service on the Pi.</div>
     </div>
     <p class="foot">
       Same aircraft logged at most once per 30 min.
@@ -280,8 +355,12 @@
   </div>
   <script>
     const RARITY_ORDER = ["LEGEND", "EPIC", "RARE", "UNCOMMON", "COMMON"];
+    const PAGE_SIZE = 40;
     let activeTab = "ident";
-    let historyRows = [];
+    let pageIdent = 1;
+    let pageHex = 1;
+    let historyIdent = { items: [], total: 0, totalPages: 1 };
+    let historyHex = { items: [], total: 0, totalPages: 1 };
 
     function fmtTs(ts) {
       return new Date(ts * 1000).toLocaleString("en-US", {
@@ -301,33 +380,54 @@
       }
     }
 
+    async function loadHistory(tab, page) {
+      const filter = tab === "hex" ? "hex" : "callsign";
+      const res = await fetch(
+        `/api/history?limit=${PAGE_SIZE}&page=${page}&filter=${filter}`
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (tab === "hex") {
+        historyHex = data;
+        pageHex = data.page;
+      } else {
+        historyIdent = data;
+        pageIdent = data.page;
+      }
+      return data;
+    }
+
+    async function refreshLive() {
+      const [stats, latest] = await Promise.all([
+        fetch("/api/stats").then((r) => r.json()),
+        fetch("/api/latest").then((r) => r.json()),
+      ]);
+      document.getElementById("totalN").textContent = stats.total;
+      document.getElementById("uniqN").textContent = stats.uniqueAircraft ?? "—";
+      document.getElementById("geoN").textContent = stats.withGpsFix ?? 0;
+      document.getElementById("modeLine").textContent =
+        (latest.mode || "ADS-B") + (latest.gpsLocked ? " · GPS" : "");
+      document.getElementById("liveCall").textContent =
+        latest.displayCall || latest.callsign || "SCANNING";
+      document.getElementById("liveSub").textContent =
+        (latest.type || "") + " · " + (latest.detail || "") + " · " + (latest.rarity || "");
+      const known = document.getElementById("knownTag");
+      if (latest.knownAircraft && latest.catchCount > 0) {
+        known.hidden = false;
+        known.textContent = `Logged ${latest.catchCount} time(s) before`;
+      } else {
+        known.hidden = true;
+      }
+      renderRarity(stats.byRarity || {});
+      document.getElementById("liveSub").className = "sub";
+    }
+
     async function refresh() {
       try {
-        const [stats, latest, history] = await Promise.all([
-          fetch("/api/stats").then((r) => r.json()),
-          fetch("/api/latest").then((r) => r.json()),
-          fetch("/api/history?limit=40").then((r) => r.json()),
-        ]);
-        document.getElementById("totalN").textContent = stats.total;
-        document.getElementById("uniqN").textContent = stats.uniqueAircraft ?? "—";
-        document.getElementById("geoN").textContent = stats.withGpsFix ?? 0;
-        document.getElementById("modeLine").textContent =
-          (latest.mode || "ADS-B") + (latest.gpsLocked ? " · GPS" : "");
-        document.getElementById("liveCall").textContent =
-          latest.displayCall || latest.callsign || "SCANNING";
-        document.getElementById("liveSub").textContent =
-          (latest.type || "") + " · " + (latest.detail || "") + " · " + (latest.rarity || "");
-        const known = document.getElementById("knownTag");
-        if (latest.knownAircraft && latest.catchCount > 0) {
-          known.hidden = false;
-          known.textContent = `Logged ${latest.catchCount} time(s) before`;
-        } else {
-          known.hidden = true;
-        }
-        renderRarity(stats.byRarity || {});
-        historyRows = history;
+        await refreshLive();
+        await loadHistory("ident", pageIdent);
+        await loadHistory("hex", pageHex);
         renderTable();
-        document.getElementById("liveSub").className = "sub";
       } catch (e) {
         document.getElementById("liveSub").textContent = "API error";
         document.getElementById("liveSub").className = "sub err";
@@ -387,19 +487,28 @@
       }
     }
 
+    function updatePager(prefix, data, page) {
+      document.getElementById(`pager${prefix}Info`).textContent =
+        `Page ${data.page} of ${data.totalPages} · ${data.total} entries`;
+      document.getElementById(`prev${prefix}`).disabled = page <= 1;
+      document.getElementById(`next${prefix}`).disabled = page >= data.totalPages;
+    }
+
     function renderTable() {
       document.getElementById("panelIdent").hidden = activeTab !== "ident";
       document.getElementById("panelHex").hidden = activeTab !== "hex";
-      fillTable(
-        "rowsIdent",
-        historyRows.filter((s) => !s.hexOnly),
-        false
-      );
-      fillTable(
-        "rowsHex",
-        historyRows.filter((s) => s.hexOnly),
-        true
-      );
+      fillTable("rowsIdent", historyIdent.items || [], false);
+      fillTable("rowsHex", historyHex.items || [], true);
+      updatePager("Ident", historyIdent, pageIdent);
+      updatePager("Hex", historyHex, pageHex);
+    }
+
+    async function goPage(tab, delta) {
+      const page = tab === "hex" ? pageHex : pageIdent;
+      const data = tab === "hex" ? historyHex : historyIdent;
+      const next = Math.min(Math.max(page + delta, 1), data.totalPages || 1);
+      await loadHistory(tab, next);
+      renderTable();
     }
 
     document.getElementById("tabIdent").onclick = () => {
@@ -414,10 +523,104 @@
       document.getElementById("tabIdent").classList.remove("active");
       renderTable();
     };
+    document.getElementById("prevIdent").onclick = () => goPage("ident", -1);
+    document.getElementById("nextIdent").onclick = () => goPage("ident", 1);
+    document.getElementById("prevHex").onclick = () => goPage("hex", -1);
+    document.getElementById("nextHex").onclick = () => goPage("hex", 1);
     document.getElementById("decodeBtn").onclick = decodeHex;
 
+    async function controlPost(url, body) {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body || {}),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || res.status);
+      return data;
+    }
+
+    async function refreshControl() {
+      try {
+        const data = await fetch("/api/control/status").then((r) => r.json());
+        const lines = [];
+        if (data.capture?.active) {
+          lines.push(`Recording: ${data.capture.message || "…"}`);
+        } else if (data.capture?.message) {
+          lines.push(data.capture.message);
+          if (data.capture.wavUrl) lines.push(`WAV: ${data.capture.wavUrl}`);
+          if (data.capture.pngUrl) lines.push(`PNG: ${data.capture.pngUrl}`);
+        }
+        if (data.scheduler?.nextPass) {
+          const p = data.scheduler.nextPass;
+          lines.push(`Next pass: ${p.name} in ${p.startInMin} min`);
+        }
+        if (data.hostResult) lines.push("WiFi:\n" + data.hostResult);
+        document.getElementById("ctrlStatus").textContent = lines.join("\n") || "Idle";
+        const cl = document.getElementById("capList");
+        cl.innerHTML = (data.captures || [])
+          .slice(0, 8)
+          .map((c) => `<a href="${c.url}">${c.name}</a> (${Math.round(c.size / 1024)} KB)`)
+          .join(" · ") || "No captures yet.";
+      } catch (e) {
+        document.getElementById("ctrlStatus").textContent = "Control API error";
+      }
+    }
+
+    async function runCapture(preset, decodeApt) {
+      document.getElementById("ctrlStatus").textContent = "Starting…";
+      try {
+        const data = await controlPost("/api/control/capture", {
+          preset,
+          durationSec: 600,
+          decodeApt: !!decodeApt,
+        });
+        document.getElementById("ctrlStatus").textContent = data.message || "Started";
+        refreshControl();
+      } catch (e) {
+        document.getElementById("ctrlStatus").textContent = e.message;
+      }
+    }
+
+    document.getElementById("capLrpt1379").onclick = () => runCapture("lrpt1379");
+    document.getElementById("capLrpt1371").onclick = () => runCapture("lrpt1371");
+    document.getElementById("capAptRaw").onclick = () => runCapture("apt1371");
+    document.getElementById("capAptDecode").onclick = () => runCapture("apt1371", true);
+    document.getElementById("capStop").onclick = async () => {
+      try {
+        const d = await controlPost("/api/control/stop");
+        document.getElementById("ctrlStatus").textContent = d.message || "Stopped";
+        refreshControl();
+      } catch (e) {
+        document.getElementById("ctrlStatus").textContent = e.message;
+      }
+    };
+    document.getElementById("restartAds").onclick = async () => {
+      try {
+        const d = await controlPost("/api/control/restart", { target: "dump1090" });
+        document.getElementById("ctrlStatus").textContent = d.ok ? "ADS-B restarted" : d.stderr;
+      } catch (e) {
+        document.getElementById("ctrlStatus").textContent = e.message;
+      }
+    };
+    async function hostCmd(cmd) {
+      document.getElementById("ctrlStatus").textContent = `Queued ${cmd}…`;
+      try {
+        await controlPost("/api/control/host", { cmd });
+        setTimeout(refreshControl, 3000);
+      } catch (e) {
+        document.getElementById("ctrlStatus").textContent = e.message;
+      }
+    }
+    document.getElementById("hostStatus").onclick = () => hostCmd("status");
+    document.getElementById("hostHotspot").onclick = () => hostCmd("hotspot");
+    document.getElementById("hostWifi").onclick = () => hostCmd("wifi");
+    document.getElementById("hostAuto").onclick = () => hostCmd("auto");
+
     refresh();
-    setInterval(refresh, 5000);
+    refreshControl();
+    setInterval(refreshLive, 5000);
+    setInterval(refreshControl, 5000);
   </script>
 </body>
 </html>

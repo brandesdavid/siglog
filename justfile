@@ -60,12 +60,14 @@ update-on-pi:
     set -euo pipefail
     PI_DIR="${SIGLOG_PI_DIR:-$HOME/siglog}"
     REPO_RAW="https://raw.githubusercontent.com/brandesdavid/siglog/main/apps/pizero2w"
-    mkdir -p "$PI_DIR/scripts"
+    mkdir -p "$PI_DIR/scripts" "$PI_DIR/control"
     if [[ -f apps/pizero2w/docker-compose.yml ]]; then
       echo "Using local apps/pizero2w/"
       cp -f apps/pizero2w/docker-compose.yml "$PI_DIR/"
       cp -f apps/pizero2w/docker-compose.gps.yml "$PI_DIR/"
       cp -f apps/pizero2w/scripts/siglog-net "$PI_DIR/scripts/"
+      cp -f apps/pizero2w/scripts/host-control-watcher.sh "$PI_DIR/scripts/"
+      cp -f apps/pizero2w/scripts/siglog-host-control.service "$PI_DIR/scripts/" 2>/dev/null || true
       chmod +x "$PI_DIR/scripts/"*
       [[ -f justfile ]] && cp -f justfile "$PI_DIR/justfile"
     else
@@ -73,13 +75,15 @@ update-on-pi:
       curl -fsSL -o "$PI_DIR/docker-compose.yml" "$REPO_RAW/docker-compose.yml"
       curl -fsSL -o "$PI_DIR/docker-compose.gps.yml" "$REPO_RAW/docker-compose.gps.yml"
       curl -fsSL -o "$PI_DIR/scripts/siglog-net" "$REPO_RAW/scripts/siglog-net"
+      curl -fsSL -o "$PI_DIR/scripts/host-control-watcher.sh" "$REPO_RAW/scripts/host-control-watcher.sh"
       curl -fsSL -o "$PI_DIR/justfile" "https://raw.githubusercontent.com/brandesdavid/siglog/main/justfile"
-      chmod +x "$PI_DIR/scripts/siglog-net"
+      chmod +x "$PI_DIR/scripts/siglog-net" "$PI_DIR/scripts/host-control-watcher.sh"
     fi
     if [[ ! -x /usr/local/bin/siglog-net ]]; then
       sudo ln -sf "$PI_DIR/scripts/siglog-net" /usr/local/bin/siglog-net
     fi
     cd "$PI_DIR"
+    export SIGLOG_CONTROL_DIR="$PI_DIR/control"
     docker compose pull
     if ! docker image inspect ghcr.io/brandesdavid/siglog-pi:latest >/dev/null 2>&1; then
       echo "ERROR: pull failed. On Mac run:  just push-pizero"

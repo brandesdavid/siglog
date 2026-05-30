@@ -19,6 +19,17 @@ from hex_lookup import (
     get_cached,
     is_icao_hex,
 )
+from manual_capture import (
+    CAPTURE_DIR,
+    capture_busy,
+    list_captures,
+    queue_host_command,
+    read_capture_state,
+    read_host_result,
+    start_capture,
+    stop_capture,
+    supervisorctl,
+)
 
 DUMP1090_JSON = os.getenv("DUMP1090_JSON", "/app/data/dump1090/aircraft.json")
 API_PORT = int(os.getenv("API_PORT", 80))
@@ -145,6 +156,15 @@ def is_hex_only_row(callsign: str, hex_id: Optional[str], key: str) -> bool:
     if hex_id and is_icao_hex(hex_id):
         return True
     return is_icao_hex(key or "")
+
+
+HISTORY_HEX_SQL = (
+    "callsign = 'UNKNOWN' "
+    "AND length(COALESCE(NULLIF(hex, ''), aircraft_key)) = 6 "
+    "AND lower(COALESCE(NULLIF(hex, ''), aircraft_key)) "
+    "GLOB '[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]'"
+)
+HISTORY_CALLSIGN_SQL = "callsign != 'UNKNOWN'"
 
 
 def catch_count(key: str) -> int:
@@ -470,8 +490,10 @@ def stats_dict() -> dict:
         "SELECT COUNT(DISTINCT COALESCE(aircraft_key, callsign)) FROM signals"
     ).fetchone()[0]
     hex_only = db_con.execute(
-        "SELECT COUNT(*) FROM signals WHERE callsign = 'UNKNOWN' "
-        "AND hex IS NOT NULL AND length(hex) = 6"
+        f"SELECT COUNT(*) FROM signals WHERE {HISTORY_HEX_SQL}"
+    ).fetchone()[0]
+    callsign_entries = db_con.execute(
+        f"SELECT COUNT(*) FROM signals WHERE {HISTORY_CALLSIGN_SQL}"
     ).fetchone()[0]
     decoded = db_con.execute("SELECT COUNT(*) FROM hex_lookup").fetchone()[0]
     row = db_con.execute("SELECT MIN(ts), MAX(ts) FROM signals").fetchone()
@@ -479,9 +501,10 @@ def stats_dict() -> dict:
         "total": total,
         "withGpsFix": with_gps_fix,
         "uniqueAircraft": unique,
-        "identified": total - hex_only,
-        "hexOnly": hex_only,
-        "hexDecoded": decoded,
+            "identified": total - hex_only,
+            "hexOnly": hex_only,
+            "callsignEntries": callsign_entries,
+            "hexDecoded": decoded,
         "byRarity": by_rarity,
         "byType": by_type,
         "firstTs": row[0],
@@ -511,40 +534,69 @@ def lookup_fields(hex_id: str) -> dict:
     }
 
 
+def row_to_signal(r: tuple) -> dict:
+    callsign = r[2]
+    hex_id = (r[9] or "").lower() if r[9] else ""
+    if not hex_id and is_icao_hex((r[8] or "")):
+        hex_id = (r[8] or "").lower()
+    hex_only = is_hex_only_row(callsign, hex_id, r[8] or "")
+    display = callsign
+    if hex_only and hex_id:
+        display = hex_id.upper()
+    item = {
+        "ts": r[0],
+        "type": r[1],
+        "callsign": callsign,
+        "displayCall": display,
+        "hex": hex_id or None,
+        "hexOnly": hex_only,
+        "detail": r[3],
+        "rarity": r[4],
+        "lat": r[5],
+        "lng": r[6],
+        "gpsFix": bool(r[7]),
+    }
+    item.update(lookup_fields(hex_id))
+    return item
+
+
 @app.route("/api/history")
 def api_history():
-    limit = min(int(request.args.get("limit", "100")), 500)
+    limit = min(int(request.args.get("limit", "40")), 500)
+    page = max(int(request.args.get("page", "1")), 1)
+    offset = (page - 1) * limit
+    filt = request.args.get("filter", "all")
+    if filt == "hex":
+        where = HISTORY_HEX_SQL
+    elif filt == "callsign":
+        where = HISTORY_CALLSIGN_SQL
+    else:
+        where = "1=1"
+    total = db_con.execute(f"SELECT COUNT(*) FROM signals WHERE {where}").fetchone()[0]
     rows = db_con.execute(
         "SELECT ts,type,callsign,detail,rarity,lat,lng,gps_fix,aircraft_key,hex "
-        "FROM signals ORDER BY ts DESC LIMIT ?",
-        (limit,),
+        f"FROM signals WHERE {where} ORDER BY ts DESC LIMIT ? OFFSET ?",
+        (limit, offset),
     ).fetchall()
-    signals = []
-    for r in rows:
-        callsign = r[2]
-        hex_id = (r[9] or "").lower() if r[9] else ""
-        if not hex_id and is_icao_hex((r[8] or "")):
-            hex_id = (r[8] or "").lower()
-        hex_only = is_hex_only_row(callsign, hex_id, r[8] or "")
-        display = callsign
-        if hex_only and hex_id:
-            display = hex_id.upper()
-        item = {
-            "ts": r[0],
-            "type": r[1],
-            "callsign": callsign,
-            "displayCall": display,
-            "hex": hex_id or None,
-            "hexOnly": hex_only,
-            "detail": r[3],
-            "rarity": r[4],
-            "lat": r[5],
-            "lng": r[6],
-            "gpsFix": bool(r[7]),
+    total_pages = max(1, (total + limit - 1) // limit)
+    if page > total_pages:
+        page = total_pages
+        offset = (page - 1) * limit
+        rows = db_con.execute(
+            "SELECT ts,type,callsign,detail,rarity,lat,lng,gps_fix,aircraft_key,hex "
+            f"FROM signals WHERE {where} ORDER BY ts DESC LIMIT ? OFFSET ?",
+            (limit, offset),
+        ).fetchall()
+    return jsonify(
+        {
+            "items": [row_to_signal(r) for r in rows],
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "totalPages": total_pages,
+            "filter": filt,
         }
-        item.update(lookup_fields(hex_id))
-        signals.append(item)
-    return jsonify(signals)
+    )
 
 
 def build_export_payload() -> dict:
@@ -674,6 +726,92 @@ def api_health():
                 "gps": state.get("gpsLocked"),
             }
         )
+
+
+CAPTURE_PRESETS = {
+    "lrpt1379": (137.9, "lrpt1379"),
+    "lrpt1371": (137.1, "lrpt1371"),
+    "apt1371": (137.1, "apt1371"),
+}
+
+
+@app.route("/api/control/status")
+def api_control_status():
+    merge_scheduler_state()
+    with state_lock:
+        sched = {
+            "nextPass": state.get("nextPass"),
+            "message": state.get("schedulerMessage"),
+            "mode": state.get("mode"),
+        }
+    return jsonify(
+        {
+            "capture": read_capture_state(),
+            "captureBusy": capture_busy(),
+            "captures": list_captures(),
+            "hostResult": read_host_result(),
+            "scheduler": sched,
+        }
+    )
+
+
+@app.route("/api/control/capture", methods=["POST"])
+def api_control_capture():
+    body = request.get_json(silent=True) or {}
+    preset = body.get("preset", "lrpt1379")
+    if preset not in CAPTURE_PRESETS:
+        return jsonify({"ok": False, "error": "unknown preset"}), 400
+    freq, label = CAPTURE_PRESETS[preset]
+    duration = int(body.get("durationSec", 600))
+    decode_apt = bool(body.get("decodeApt")) and preset.startswith("apt")
+    return jsonify(
+        start_capture(freq, duration, label, decode_apt=decode_apt)
+    )
+
+
+@app.route("/api/control/stop", methods=["POST"])
+def api_control_stop():
+    return jsonify(stop_capture())
+
+
+@app.route("/api/control/restart", methods=["POST"])
+def api_control_restart():
+    body = request.get_json(silent=True) or {}
+    target = body.get("target", "dump1090")
+    allowed = {"dump1090", "api", "scheduler", "all"}
+    if target not in allowed:
+        return jsonify({"ok": False, "error": "unknown target"}), 400
+    if target == "all":
+        r = supervisorctl("restart", "dump1090", "scheduler")
+    else:
+        r = supervisorctl("restart", target)
+    return jsonify(
+        {
+            "ok": r.returncode == 0,
+            "stdout": r.stdout[-500:] if r.stdout else "",
+            "stderr": r.stderr[-500:] if r.stderr else "",
+        }
+    )
+
+
+@app.route("/api/control/host", methods=["POST"])
+def api_control_host():
+    body = request.get_json(silent=True) or {}
+    cmd = body.get("cmd", "status")
+    try:
+        queue_host_command(cmd)
+        return jsonify({"ok": True, "message": f"Queued siglog-net {cmd}"})
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+
+
+@app.route("/api/captures/<path:name>")
+def api_capture_file(name):
+    safe = os.path.basename(name)
+    path = CAPTURE_DIR / safe
+    if not path.is_file():
+        return jsonify({"error": "not found"}), 404
+    return send_from_directory(CAPTURE_DIR, safe, as_attachment=True)
 
 
 if __name__ == "__main__":

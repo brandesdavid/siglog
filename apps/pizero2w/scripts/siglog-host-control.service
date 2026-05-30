@@ -1,0 +1,14 @@
+[Unit]
+Description=SIGLOG host control (WiFi from web UI)
+After=network.target docker.service
+
+[Service]
+Type=simple
+User=pi
+Environment=SIGLOG_CONTROL_DIR=/home/pi/siglog/control
+ExecStart=/home/pi/siglog/scripts/host-control-watcher.sh
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

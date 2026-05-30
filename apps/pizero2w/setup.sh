@@ -31,13 +31,21 @@ sudo raspi-config nonint do_serial_cons 1
 
 echo "[5/6] WiFi (auto: home first, hotspot fallback)..."
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-mkdir -p ~/siglog/scripts
+mkdir -p ~/siglog/scripts ~/siglog/control
 cp -f "$SCRIPT_DIR/scripts/siglog-net" ~/siglog/scripts/
+cp -f "$SCRIPT_DIR/scripts/host-control-watcher.sh" ~/siglog/scripts/
+cp -f "$SCRIPT_DIR/scripts/siglog-host-control.service" ~/siglog/scripts/ 2>/dev/null || true
 cp -f "$SCRIPT_DIR/scripts/pizero-hotspot-on.sh" ~/siglog/scripts/ 2>/dev/null || true
 cp -f "$SCRIPT_DIR/scripts/pizero-hotspot-off.sh" ~/siglog/scripts/ 2>/dev/null || true
 chmod +x ~/siglog/scripts/*
 sudo ln -sf ~/siglog/scripts/siglog-net /usr/local/bin/siglog-net
 bash ~/siglog/scripts/siglog-net auto
+if [ -f ~/siglog/scripts/siglog-host-control.service ]; then
+  sudo sed "s|/home/pi|$HOME|g" ~/siglog/scripts/siglog-host-control.service | \
+    sudo tee /etc/systemd/system/siglog-host-control.service > /dev/null
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now siglog-host-control.service 2>/dev/null || true
+fi
 
 echo "[6/6] Starting SIGLOG container (pre-built image, no compile on Pi)..."
 mkdir -p ~/siglog
