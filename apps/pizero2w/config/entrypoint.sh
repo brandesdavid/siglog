@@ -1,6 +1,6 @@
 #!/bin/sh
 set -e
-mkdir -p /app/data/dump1090
+mkdir -p /app/data/dump1090 /app/data/logs /app/data/captures /app/data/control
 if [ "$FAKE_SIGNALS" = "1" ]; then
   exec python3 /app/api/server.py
 fi

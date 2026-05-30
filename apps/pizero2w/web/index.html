@@ -3,7 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>SIGLOG Log</title>
+  <title>SIGLOG</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
     :root {
       --bg: #f0f0f0;
@@ -28,6 +29,7 @@
       margin: 0 auto;
       padding: 12px;
     }
+    .wrap.wide { max-width: 960px; }
     .bar {
       background: var(--paper);
       border: 2px solid var(--line);
@@ -46,6 +48,41 @@
       font-size: 11px;
       text-transform: uppercase;
       color: var(--muted);
+      text-align: right;
+      max-width: 55%;
+      line-height: 1.35;
+    }
+    .mode-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 8px 10px;
+      border-bottom: 2px solid var(--line);
+      background: var(--paper);
+    }
+    .mode-pill {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      padding: 4px 8px;
+      border: 2px solid var(--line);
+      background: var(--scan);
+      color: var(--muted);
+    }
+    .mode-pill.on {
+      background: var(--ink);
+      color: var(--paper);
+      border-color: var(--ink);
+    }
+    .mode-pill.warn {
+      background: var(--accent);
+      color: var(--ink);
+      border-color: var(--line);
+    }
+    .mode-pill.ok {
+      background: var(--paper);
+      color: var(--ink);
     }
     .grid {
       display: grid;
@@ -258,14 +295,125 @@
     }
     .cap-list { padding: 8px 10px; font-size: 11px; }
     .cap-list a { color: var(--ink); }
+    .log-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--line-light);
+      align-items: center;
+    }
+    .log-toolbar select {
+      border: 2px solid var(--line);
+      padding: 6px 8px;
+      font-size: 11px;
+      background: var(--paper);
+    }
+    .log-view {
+      margin: 0;
+      padding: 10px;
+      font-family: "Courier New", Courier, monospace;
+      font-size: 10px;
+      line-height: 1.35;
+      max-height: 280px;
+      overflow: auto;
+      background: #fafafa;
+      border-top: 1px solid var(--line-light);
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .main-tabs {
+      display: flex;
+      border: 2px solid var(--line);
+      margin-bottom: 10px;
+      background: var(--scan);
+    }
+    .main-tab {
+      flex: 1;
+      padding: 10px;
+      border: none;
+      border-right: 2px solid var(--line);
+      background: var(--scan);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      cursor: pointer;
+      color: var(--muted);
+    }
+    .main-tab:last-child { border-right: none; }
+    .main-tab.active {
+      background: var(--paper);
+      color: var(--ink);
+    }
+    .plan-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 10px;
+      align-items: flex-end;
+      border-bottom: 2px solid var(--line);
+    }
+    .plan-field label {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: var(--muted);
+      display: block;
+      margin-bottom: 4px;
+    }
+    .plan-field input {
+      width: 88px;
+      border: 2px solid var(--line);
+      padding: 6px 8px;
+      font-size: 12px;
+    }
+    .plan-layout {
+      display: grid;
+      grid-template-columns: 1fr 240px;
+    }
+    #planMap {
+      min-height: 400px;
+      background: #e8e8e8;
+      border-right: 2px solid var(--line);
+    }
+    .plan-side {
+      padding: 10px;
+      font-size: 11px;
+      max-height: 400px;
+      overflow-y: auto;
+    }
+    .plan-go {
+      border: 2px solid var(--line);
+      padding: 10px;
+      margin-bottom: 10px;
+      background: var(--accent);
+    }
+    .plan-go .t { font-weight: 700; margin-bottom: 4px; }
+    .plan-pass {
+      padding: 8px;
+      border: 1px solid var(--line-light);
+      margin-bottom: 6px;
+      cursor: pointer;
+    }
+    .plan-pass:hover, .plan-pass.active { border-color: var(--ink); background: var(--scan); }
+    .plan-pass strong { display: block; }
+    @media (max-width: 720px) {
+      .plan-layout { grid-template-columns: 1fr; }
+      #planMap { border-right: none; border-bottom: 2px solid var(--line); min-height: 280px; }
+    }
   </style>
 </head>
 <body>
-  <div class="wrap">
+  <div class="wrap" id="wrap">
     <div class="bar">
       <h1>SIGLOG</h1>
       <span class="mode" id="modeLine">—</span>
     </div>
+    <div class="main-tabs">
+      <button type="button" class="main-tab active" id="navLog">Log</button>
+      <button type="button" class="main-tab" id="navPlan">Plan</button>
+    </div>
+    <div id="viewLog">
     <div class="grid">
       <div class="cell"><div class="n" id="totalN">0</div><div class="l">Entries</div></div>
       <div class="cell"><div class="n" id="uniqN">0</div><div class="l">Unique</div></div>
@@ -302,7 +450,7 @@
       </div>
       <div id="panelHex" hidden>
         <div class="hex-note">
-          Mode S hex only. Decode needs home Wi‑Fi (adsbdb.com). Results stay cached on the Pi.
+          Mode S hex only. Decode needs home Wi‑Fi (adsbdb.com). Results saved in SQLite on the Pi (survives reboot).
         </div>
         <div class="hex-actions">
           <button type="button" class="btn" id="decodeBtn">Decode hex</button>
@@ -325,6 +473,11 @@
     </div>
     <div class="panel">
       <div class="panel-h">Controls</div>
+      <div class="mode-strip">
+        <span class="mode-pill on" id="pillSignal">ADS-B</span>
+        <span class="mode-pill" id="pillWifi">WiFi unknown</span>
+        <span class="mode-pill ok" id="pillGps" hidden>GPS</span>
+      </div>
       <div class="hex-note">
         LRPT decode is heavy on Pi Zero — record raw WAV here, decode at home (SatDump).
         Recording stops ADS-B for the duration.
@@ -347,12 +500,60 @@
       <div class="cap-list" id="capList"></div>
       <div class="ctrl-note">WiFi buttons need host watcher: <code>siglog-host-control</code> service on the Pi.</div>
     </div>
+    <div class="panel">
+      <div class="panel-h">Logs</div>
+      <div class="log-toolbar">
+        <select id="logService">
+          <option value="all">All services</option>
+          <option value="api">API</option>
+          <option value="dump1090">dump1090</option>
+          <option value="scheduler">Scheduler</option>
+          <option value="gpsd">gpsd</option>
+        </select>
+        <button type="button" class="btn secondary" id="logRefresh">Refresh</button>
+        <span class="decode-msg" id="logMeta"></span>
+      </div>
+      <pre class="log-view" id="logView">Loading…</pre>
+    </div>
     <p class="foot">
       Same aircraft logged at most once per 30 min.
       <a href="/api/export" download="siglog-export.json">Download JSON</a>
       · Mac: <code>just sync-siglog-github</code>
     </p>
+    </div>
+    <div id="viewPlan" hidden>
+      <div class="panel">
+        <div class="panel-h">Meteor pass planning</div>
+        <div class="hex-note">
+          At home: Pi needs Wi‑Fi once for fresh TLE. Map tiles load from the internet in your browser.
+        </div>
+        <div class="plan-toolbar">
+          <div class="plan-field">
+            <label for="planLat">Lat</label>
+            <input id="planLat" type="number" step="0.0001" value="52.52" />
+          </div>
+          <div class="plan-field">
+            <label for="planLng">Lng</label>
+            <input id="planLng" type="number" step="0.0001" value="13.405" />
+          </div>
+          <button type="button" class="btn" id="planFetch">Fetch passes</button>
+          <button type="button" class="btn secondary" id="planCache">Save in browser</button>
+          <span class="decode-msg" id="planStatus"></span>
+        </div>
+        <div class="plan-layout">
+          <div id="planMap"></div>
+          <div class="plan-side">
+            <div class="plan-go" id="planGo">
+              <div class="t" id="planGoTitle">—</div>
+              <div id="planGoMeta"></div>
+            </div>
+            <div id="planPassList"></div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
     const RARITY_ORDER = ["LEGEND", "EPIC", "RARE", "UNCOMMON", "COMMON"];
     const PAGE_SIZE = 40;
@@ -405,8 +606,6 @@
       document.getElementById("totalN").textContent = stats.total;
       document.getElementById("uniqN").textContent = stats.uniqueAircraft ?? "—";
       document.getElementById("geoN").textContent = stats.withGpsFix ?? 0;
-      document.getElementById("modeLine").textContent =
-        (latest.mode || "ADS-B") + (latest.gpsLocked ? " · GPS" : "");
       document.getElementById("liveCall").textContent =
         latest.displayCall || latest.callsign || "SCANNING";
       document.getElementById("liveSub").textContent =
@@ -420,6 +619,32 @@
       }
       renderRarity(stats.byRarity || {});
       document.getElementById("liveSub").className = "sub";
+    }
+
+    function wifiPillClass(mode) {
+      if (mode === "hotspot") return "mode-pill warn";
+      if (mode === "home" || mode === "auto") return "mode-pill ok";
+      return "mode-pill";
+    }
+
+    function signalPillClass(signal) {
+      return signal === "ADS-B" ? "mode-pill on" : "mode-pill warn";
+    }
+
+    function updateSystemMode(system) {
+      if (!system) return;
+      const parts = [system.signalDetail || system.signal || "ADS-B"];
+      if (system.gps) parts.push("GPS");
+      parts.push(system.wifiLabel || "WiFi unknown");
+      document.getElementById("modeLine").textContent = parts.join(" · ");
+      const pillSignal = document.getElementById("pillSignal");
+      pillSignal.textContent = system.signalDetail || system.signal || "ADS-B";
+      pillSignal.className = signalPillClass(system.signal);
+      const pillWifi = document.getElementById("pillWifi");
+      pillWifi.textContent = system.wifiLabel || "WiFi unknown";
+      pillWifi.className = wifiPillClass(system.wifi);
+      const pillGps = document.getElementById("pillGps");
+      pillGps.hidden = !system.gps;
     }
 
     async function refresh() {
@@ -540,9 +765,21 @@
       return data;
     }
 
+    let wifiStatusQueued = false;
+
     async function refreshControl() {
       try {
         const data = await fetch("/api/control/status").then((r) => r.json());
+        updateSystemMode(data.system);
+        if (data.system?.wifi === "unknown" && !wifiStatusQueued) {
+          wifiStatusQueued = true;
+          try {
+            await controlPost("/api/control/host", { cmd: "status" });
+            setTimeout(refreshControl, 2000);
+          } catch {
+            wifiStatusQueued = false;
+          }
+        }
         const lines = [];
         if (data.capture?.active) {
           lines.push(`Recording: ${data.capture.message || "…"}`);
@@ -607,7 +844,9 @@
       document.getElementById("ctrlStatus").textContent = `Queued ${cmd}…`;
       try {
         await controlPost("/api/control/host", { cmd });
-        setTimeout(refreshControl, 3000);
+        for (const delay of [1500, 4000, 8000]) {
+          setTimeout(refreshControl, delay);
+        }
       } catch (e) {
         document.getElementById("ctrlStatus").textContent = e.message;
       }
@@ -617,10 +856,174 @@
     document.getElementById("hostWifi").onclick = () => hostCmd("wifi");
     document.getElementById("hostAuto").onclick = () => hostCmd("auto");
 
+    let logStickBottom = true;
+
+    async function refreshLogs() {
+      const service = document.getElementById("logService").value;
+      try {
+        const data = await fetch(`/api/logs?service=${service}&lines=200`).then((r) => r.json());
+        const el = document.getElementById("logView");
+        const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+        el.textContent = (data.lines || []).join("\n");
+        document.getElementById("logMeta").textContent =
+          (data.sources || []).join(", ") || "waiting for log files";
+        if (logStickBottom || atBottom) {
+          el.scrollTop = el.scrollHeight;
+          logStickBottom = true;
+        }
+      } catch (e) {
+        document.getElementById("logView").textContent = "Log fetch failed";
+      }
+    }
+
+    document.getElementById("logRefresh").onclick = () => {
+      logStickBottom = true;
+      refreshLogs();
+    };
+    document.getElementById("logService").onchange = () => {
+      logStickBottom = true;
+      refreshLogs();
+    };
+    document.getElementById("logView").onscroll = (e) => {
+      const el = e.target;
+      logStickBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    };
+
+    const PLAN_CACHE = "siglogPlanCache";
+    let planMap = null;
+    let planObserver = null;
+    let planTrack = null;
+    let planData = null;
+
+    function fmtIso(iso) {
+      if (!iso) return "—";
+      return new Date(iso).toLocaleString("en-US", {
+        weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
+      });
+    }
+
+    function initPlanMap() {
+      if (planMap) return;
+      planMap = L.map("planMap").setView([52.52, 13.405], 6);
+      L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
+        attribution: "&copy; OSM &copy; CARTO",
+        maxZoom: 18,
+      }).addTo(planMap);
+    }
+
+    function renderPlanGo(pass) {
+      const title = document.getElementById("planGoTitle");
+      const meta = document.getElementById("planGoMeta");
+      if (!pass) {
+        title.textContent = "No pass";
+        meta.textContent = "Fetch passes (home Wi‑Fi).";
+        return;
+      }
+      title.textContent =
+        pass.startInMin <= 20 ? "Go now" : `Next: ${pass.name}`;
+      meta.innerHTML =
+        `${fmtIso(pass.aos)} – ${fmtIso(pass.los)}<br>` +
+        `${pass.freqMhz} MHz · max ${pass.maxElevation}° · ~54 cm dipole · LRPT<br>` +
+        `Start in ${pass.startInMin} min`;
+    }
+
+    function drawPlanPass(idx) {
+      if (!planData?.passes?.[idx]) return;
+      const pass = planData.passes[idx];
+      document.querySelectorAll(".plan-pass").forEach((el, i) => {
+        el.classList.toggle("active", i === idx);
+      });
+      if (planTrack) planMap.removeLayer(planTrack);
+      const pts = (pass.track || []).map((p) => [p.lat, p.lng]);
+      if (pts.length >= 2) {
+        planTrack = L.polyline(pts, { color: "#222", weight: 3 }).addTo(planMap);
+        const bounds = L.latLngBounds(pts);
+        bounds.extend([planData.observer.lat, planData.observer.lng]);
+        planMap.fitBounds(bounds, { padding: [24, 24] });
+      }
+      renderPlanGo(pass);
+    }
+
+    function applyPlanData(data) {
+      planData = data;
+      document.getElementById("planLat").value = data.observer.lat;
+      document.getElementById("planLng").value = data.observer.lng;
+      if (planObserver) planMap.removeLayer(planObserver);
+      planObserver = L.circleMarker([data.observer.lat, data.observer.lng], {
+        radius: 9, color: "#f5c400", fillColor: "#f5c400", fillOpacity: 0.9, weight: 2,
+      }).bindPopup("Observer").addTo(planMap);
+      planMap.setView([data.observer.lat, data.observer.lng], 7);
+      const ul = document.getElementById("planPassList");
+      ul.innerHTML = "";
+      (data.passes || []).forEach((p, i) => {
+        const div = document.createElement("div");
+        div.className = "plan-pass" + (i === 0 ? " active" : "");
+        div.innerHTML =
+          `<strong>${p.name}</strong>${fmtIso(p.aos)} · ${p.startInMin} min · ${p.maxElevation}°`;
+        div.onclick = () => drawPlanPass(i);
+        ul.appendChild(div);
+      });
+      document.getElementById("planStatus").textContent =
+        `${(data.passes || []).length} passes (48 h)`;
+      if (data.passes?.length) drawPlanPass(0);
+      else renderPlanGo(null);
+      setTimeout(() => planMap.invalidateSize(), 100);
+    }
+
+    async function fetchPlanPasses() {
+      const lat = document.getElementById("planLat").value;
+      const lng = document.getElementById("planLng").value;
+      document.getElementById("planStatus").textContent = "Loading…";
+      try {
+        const res = await fetch(`/api/map?hours=48&lat=${lat}&lng=${lng}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        localStorage.setItem(PLAN_CACHE, JSON.stringify(data));
+        applyPlanData(data);
+      } catch (e) {
+        document.getElementById("planStatus").textContent = `Failed: ${e.message}`;
+        const cached = localStorage.getItem(PLAN_CACHE);
+        if (cached) applyPlanData(JSON.parse(cached));
+      }
+    }
+
+    function showMainView(view) {
+      const isPlan = view === "plan";
+      document.getElementById("viewLog").hidden = isPlan;
+      document.getElementById("viewPlan").hidden = !isPlan;
+      document.getElementById("navLog").classList.toggle("active", !isPlan);
+      document.getElementById("navPlan").classList.toggle("active", isPlan);
+      document.getElementById("wrap").classList.toggle("wide", isPlan);
+      if (isPlan) {
+        initPlanMap();
+        if (!planData) {
+          const cached = localStorage.getItem(PLAN_CACHE);
+          if (cached) {
+            try { applyPlanData(JSON.parse(cached)); } catch { /* ignore */ }
+          }
+        }
+        setTimeout(() => planMap?.invalidateSize(), 150);
+      }
+    }
+
+    document.getElementById("navLog").onclick = () => showMainView("log");
+    document.getElementById("navPlan").onclick = () => showMainView("plan");
+    document.getElementById("planFetch").onclick = fetchPlanPasses;
+    document.getElementById("planCache").onclick = () => {
+      if (!planData) {
+        document.getElementById("planStatus").textContent = "Fetch first.";
+        return;
+      }
+      localStorage.setItem(PLAN_CACHE, JSON.stringify(planData));
+      document.getElementById("planStatus").textContent = "Saved in browser.";
+    };
+
     refresh();
     refreshControl();
+    refreshLogs();
     setInterval(refreshLive, 5000);
     setInterval(refreshControl, 5000);
+    setInterval(refreshLogs, 5000);
   </script>
 </body>
 </html>

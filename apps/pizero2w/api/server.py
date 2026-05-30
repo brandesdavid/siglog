@@ -30,6 +30,7 @@ from manual_capture import (
     stop_capture,
     supervisorctl,
 )
+from log_reader import read_logs
 
 DUMP1090_JSON = os.getenv("DUMP1090_JSON", "/app/data/dump1090/aircraft.json")
 API_PORT = int(os.getenv("API_PORT", 80))
@@ -669,8 +670,13 @@ def api_map():
     with state_lock:
         lat = state.get("lat")
         lng = state.get("lng")
-    if lat is None or lng is None:
+    if request.args.get("lat") is not None:
+        lat = float(request.args.get("lat"))
+    elif lat is None:
         lat = float(os.getenv("SIGLOG_LAT", "52.52"))
+    if request.args.get("lng") is not None:
+        lng = float(request.args.get("lng"))
+    elif lng is None:
         lng = float(os.getenv("SIGLOG_LON", "13.405"))
     hours = float(request.args.get("hours", "48"))
     min_el = float(request.args.get("minEl", os.getenv("NOAA_MIN_ELEVATION", "15")))
@@ -735,22 +741,73 @@ CAPTURE_PRESETS = {
 }
 
 
+def parse_wifi_from_host(text: str | None) -> dict:
+    if not text:
+        return {"mode": "unknown", "label": "WiFi unknown"}
+    if "Auto-Modus aktiv" in text:
+        return {"mode": "auto", "label": "WiFi auto"}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("Modus:"):
+            detail = stripped.split("Modus:", 1)[1].strip()
+            if "Hotspot" in detail:
+                return {"mode": "hotspot", "label": "Hotspot"}
+            if "Heim-WLAN" in detail:
+                return {"mode": "home", "label": "Home WiFi"}
+    return {"mode": "unknown", "label": "WiFi unknown"}
+
+
+def build_system_status(
+    cap: dict, sch_mode: str, host_text: str | None, gps_locked: bool
+) -> dict:
+    if cap.get("active"):
+        msg = cap.get("message") or ""
+        if "Decoding" in msg:
+            signal = "APT_DECODE"
+        else:
+            signal = "RECORD"
+        signal_detail = msg or f"Recording {cap.get('label', '')}"
+    elif sch_mode == "NOAA_RECORD":
+        signal = "NOAA_RECORD"
+        signal_detail = "NOAA recording"
+    elif sch_mode == "NOAA_DECODE":
+        signal = "NOAA_DECODE"
+        signal_detail = "NOAA decoding"
+    else:
+        signal = "ADS-B"
+        signal_detail = "ADS-B"
+    wifi = parse_wifi_from_host(host_text)
+    return {
+        "signal": signal,
+        "signalDetail": signal_detail,
+        "wifi": wifi["mode"],
+        "wifiLabel": wifi["label"],
+        "gps": bool(gps_locked),
+    }
+
+
 @app.route("/api/control/status")
 def api_control_status():
     merge_scheduler_state()
+    cap = read_capture_state()
+    host_text = read_host_result()
     with state_lock:
         sched = {
             "nextPass": state.get("nextPass"),
             "message": state.get("schedulerMessage"),
             "mode": state.get("mode"),
         }
+        system = build_system_status(
+            cap, state.get("mode", "ADS-B"), host_text, state.get("gpsLocked")
+        )
     return jsonify(
         {
-            "capture": read_capture_state(),
+            "capture": cap,
             "captureBusy": capture_busy(),
             "captures": list_captures(),
-            "hostResult": read_host_result(),
+            "hostResult": host_text,
             "scheduler": sched,
+            "system": system,
         }
     )
 
@@ -812,6 +869,13 @@ def api_capture_file(name):
     if not path.is_file():
         return jsonify({"error": "not found"}), 404
     return send_from_directory(CAPTURE_DIR, safe, as_attachment=True)
+
+
+@app.route("/api/logs")
+def api_logs():
+    service = request.args.get("service", "all")
+    lines = int(request.args.get("lines", "200"))
+    return jsonify(read_logs(service=service, max_lines=lines))
 
 
 if __name__ == "__main__":
