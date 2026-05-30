@@ -28,7 +28,7 @@ apps/esp32/        Feather firmware (ESP-IDF, planned)
 1. Flash **Raspberry Pi OS Lite (64-bit)** via Raspberry Pi Imager (SSH + home WiFi in advanced options).
 2. **Mac** (after code changes): `just push-pizero` (or `just release-pizero`).
 3. **Pi** (first time): clone repo or copy `justfile`, then `sudo apt install -y just` and `just setup-on-pi`.
-4. **Pi** (every update): `cd ~/siglog && just update-on-pi` (or from repo clone: `just update-on-pi`). Never `docker compose build` on the Pi.
+4. **Pi** (every update): `cd ~/siglog && just update-on-pi`. Never `docker compose build` on the Pi. GPS overlay only with `SIGLOG_GPS=1 just update-on-pi` when the NEO-6M is wired (UART enabled ≠ module present).
 5. **Mac** dev without SDR: `just run-pizero-fake` — API on http://localhost:8080
 
 | Command | Where | What |
