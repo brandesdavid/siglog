@@ -53,14 +53,14 @@ update-on-pi:
       echo "ERROR: pull failed. On Mac run:  just push-pizero"
       exit 1
     fi
-    GPS_COMPOSE=""
-    if [[ -f "$PI_DIR/docker-compose.gps.yml" ]] && { [[ -e /dev/serial0 ]] || [[ -e /dev/ttyAMA0 ]] || [[ -e /dev/ttyS0 ]]; }; then
-      GPS_COMPOSE="-f docker-compose.gps.yml"
+    COMPOSE_ARGS=(-f docker-compose.yml)
+    if [[ -f docker-compose.gps.yml ]] && { [[ -e /dev/serial0 ]] || [[ -e /dev/ttyAMA0 ]] || [[ -e /dev/ttyS0 ]]; }; then
+      COMPOSE_ARGS+=(-f docker-compose.gps.yml)
       echo "GPS serial found — enabling GPS compose overlay"
     else
       echo "No GPS serial device — running without GPS (ADS-B only)"
     fi
-    docker compose $GPS_COMPOSE up -d --no-build
+    docker compose "${COMPOSE_ARGS[@]}" up -d --no-build
     IP="$(hostname -I | awk '{print $1}')"
     echo ""
     echo "SIGLOG updated."
