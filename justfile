@@ -150,5 +150,4 @@ push-siglog-export BRANCH="siglog-data":
     echo "Pushed branch ${BRANCH}"
 
 sync-siglog-github PI_URL="http://192.168.0.6" BRANCH="siglog-data":
-    just pull-siglog-export PI_URL={{PI_URL}}
-    just push-siglog-export BRANCH={{BRANCH}}
+    PI_URL={{PI_URL}} BRANCH={{BRANCH}} just pull-siglog-export && just push-siglog-export 
