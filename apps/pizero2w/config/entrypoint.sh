@@ -10,4 +10,5 @@ if [ -e "$GPS_DEVICE" ]; then
 else
   SUPERVISOR_CONF=/etc/supervisor/conf.d/siglog-no-gps.conf
 fi
+export SUPERVISOR_CONFIG="$SUPERVISOR_CONF"
 exec /usr/bin/supervisord -n -c "$SUPERVISOR_CONF"

@@ -45,6 +45,11 @@ ESP32 can point at `http://<pi-lan-ip>/api/latest` on the same LAN.
 
 ## API
 
-- `GET /api/latest` - current signal for the handheld UI
+- `GET /api/latest` - current signal for the handheld UI (ADS-B or active NOAA pass)
+- `GET /api/passes` - next NOAA-15/18/19 passes (TLE + Skyfield), notify ~15 min before
 - `GET /api/history` - last 100 logged signals
 - `GET /api/health` - status
+
+**One RTL-SDR:** ADS-B runs by default; ~15 min before a NOAA pass the API shows `nextPass` and antenna hint (~54 cm dipole). During the pass the scheduler stops dump1090, records APT audio, decodes with `noaa-apt`, logs a `RARE` NOAA entry, then restarts ADS-B.
+
+Set observer position via GPS (when connected) or `SIGLOG_LAT` / `SIGLOG_LON` in `docker-compose.yml` (default Berlin).

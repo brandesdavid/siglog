@@ -11,8 +11,11 @@ from flask import Flask, jsonify
 DUMP1090_JSON = os.getenv("DUMP1090_JSON", "/app/data/dump1090/aircraft.json")
 API_PORT = int(os.getenv("API_PORT", 80))
 DB_PATH = "/app/data/signals.db"
+SCHEDULER_STATE = "/app/data/scheduler_state.json"
+POSITION_PATH = "/app/data/position.json"
 POLL_INTERVAL = 2.0
 FAKE_SIGNALS = os.getenv("FAKE_SIGNALS", "0") == "1"
+ENABLE_GPS = os.getenv("ENABLE_GPS", "auto")
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -32,6 +35,10 @@ state = {
     "battery": 100,
     "lat": None,
     "lng": None,
+    "nextPass": None,
+    "upcoming": [],
+    "schedulerMessage": None,
+    "mode": "ADS-B",
 }
 state_lock = threading.Lock()
 
@@ -144,6 +151,57 @@ def format_detail(ac: dict) -> str:
 
 
 last_callsign = ""
+last_noaa_key = ""
+
+
+def gps_enabled() -> bool:
+    if ENABLE_GPS == "0":
+        return False
+    if ENABLE_GPS == "1":
+        return True
+    return os.path.exists("/var/run/gpsd.sock")
+
+
+def write_position(lat: float, lng: float) -> None:
+    os.makedirs("/app/data", exist_ok=True)
+    with open(POSITION_PATH, "w", encoding="utf-8") as f:
+        json.dump({"lat": lat, "lng": lng, "ts": int(time.time())}, f)
+
+
+def merge_scheduler_state() -> None:
+    try:
+        with open(SCHEDULER_STATE, encoding="utf-8") as f:
+            sch = json.load(f)
+    except OSError:
+        return
+    with state_lock:
+        state["nextPass"] = sch.get("nextPass")
+        state["upcoming"] = sch.get("upcoming", [])
+        state["schedulerMessage"] = sch.get("message")
+        mode = sch.get("mode", "ADS-B")
+        state["mode"] = mode
+        if mode == "NOAA_RECORD":
+            p = sch.get("pass") or {}
+            state["type"] = "NOAA"
+            state["callsign"] = p.get("name", "SAT")
+            state["detail"] = sch.get("message", "Recording pass…")
+            state["rarity"] = "RARE"
+        elif mode == "NOAA_DECODE":
+            p = sch.get("pass") or {}
+            state["type"] = "NOAA"
+            state["callsign"] = p.get("name", "SAT")
+            state["detail"] = sch.get("message", "Decoding…")
+            state["rarity"] = "RARE"
+        last = sch.get("lastCapture")
+        if last and mode == "ADS-B":
+            global last_noaa_key
+            key = f"{last.get('name')}_{last.get('ts')}"
+            if key != last_noaa_key:
+                last_noaa_key = key
+                state["type"] = "NOAA"
+                state["callsign"] = last.get("name", "NOAA")
+                state["detail"] = last.get("detail", "APT capture")
+                state["rarity"] = "RARE"
 
 
 def apply_aircraft(best: dict):
@@ -169,6 +227,10 @@ def apply_aircraft(best: dict):
 
 
 def poll_dump1090():
+    merge_scheduler_state()
+    with state_lock:
+        if state.get("mode") in ("NOAA_RECORD", "NOAA_DECODE"):
+            return
     if FAKE_SIGNALS:
         ac = random.choice(FAKE_AIRCRAFT).copy()
         ac["_rarity"] = classify_rarity(ac)
@@ -216,8 +278,12 @@ def poll_gps():
                     with state_lock:
                         state["gpsLocked"] = locked
                         if locked:
-                            state["lat"] = getattr(report, "lat", None)
-                            state["lng"] = getattr(report, "lon", None)
+                            lat = getattr(report, "lat", None)
+                            lng = getattr(report, "lon", None)
+                            state["lat"] = lat
+                            state["lng"] = lng
+                            if lat is not None and lng is not None:
+                                write_position(lat, lng)
         except Exception as e:
             log.warning("GPS error: %s — retrying in 5s", e)
             time.sleep(5)
@@ -235,8 +301,25 @@ def fake_gps_loop():
 def signal_loop():
     log.info("Signal poller started (fake=%s)", FAKE_SIGNALS)
     while True:
+        merge_scheduler_state()
         poll_dump1090()
         time.sleep(POLL_INTERVAL)
+
+
+def fake_scheduler_loop():
+    while True:
+        with state_lock:
+            state["nextPass"] = {
+                "name": "NOAA 19",
+                "startInMin": 8,
+                "maxElevation": 42.0,
+                "freqMhz": 137.1,
+                "antennaCm": 54,
+                "aptSat": "noaa_19",
+            }
+            state["upcoming"] = [state["nextPass"]]
+            state["schedulerMessage"] = "NOAA 19 in 8 min — dipole ~54 cm"
+        time.sleep(30)
 
 
 @app.route("/api/latest")
@@ -266,9 +349,34 @@ def api_history():
     return jsonify(signals)
 
 
+@app.route("/api/passes")
+def api_passes():
+    merge_scheduler_state()
+    with state_lock:
+        return jsonify(
+            {
+                "nextPass": state.get("nextPass"),
+                "upcoming": state.get("upcoming", []),
+                "message": state.get("schedulerMessage"),
+                "lat": state.get("lat"),
+                "lng": state.get("lng"),
+            }
+        )
+
+
 @app.route("/api/health")
 def api_health():
-    return jsonify({"status": "ok", "total": state["total"], "fake": FAKE_SIGNALS})
+    merge_scheduler_state()
+    with state_lock:
+        return jsonify(
+            {
+                "status": "ok",
+                "total": state["total"],
+                "fake": FAKE_SIGNALS,
+                "mode": state.get("mode"),
+                "gps": state.get("gpsLocked"),
+            }
+        )
 
 
 if __name__ == "__main__":
@@ -276,8 +384,14 @@ if __name__ == "__main__":
 
     if FAKE_SIGNALS:
         threading.Thread(target=fake_gps_loop, daemon=True).start()
-    else:
+        threading.Thread(target=fake_scheduler_loop, daemon=True).start()
+    elif gps_enabled():
         threading.Thread(target=poll_gps, daemon=True).start()
+    else:
+        write_position(
+            float(os.getenv("SIGLOG_LAT", "52.52")),
+            float(os.getenv("SIGLOG_LON", "13.405")),
+        )
 
     threading.Thread(target=signal_loop, daemon=True).start()
     state["total"] = total_signals()
