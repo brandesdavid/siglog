@@ -18,10 +18,20 @@ SUPERVISOR_CONF = os.getenv(
     "SUPERVISOR_CONFIG", "/etc/supervisor/conf.d/siglog-no-gps.conf"
 )
 
+from signal_monitor import (
+    CHECK_SEC,
+    analyze_wav,
+    interpret_check,
+    quick_check_cmd,
+    run_capture_monitor,
+    snapshot_signal,
+)
+
 log = logging.getLogger("siglog.manual_capture")
 
 _capture_lock = threading.Lock()
 _capture_proc: subprocess.Popen | None = None
+_check_lock = threading.Lock()
 
 
 def _capture_satellite_name(label: str, pass_name: str | None) -> str:
@@ -51,6 +61,48 @@ def _write_capture_state(payload: dict) -> None:
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(payload, f)
     tmp.replace(CAPTURE_STATE)
+
+
+def _patch_capture_state(patch: dict) -> None:
+    cur = read_capture_state()
+    cur.update(patch)
+    _write_capture_state(cur)
+
+
+def quick_signal_check(freq_mhz: float, duration_sec: int = CHECK_SEC) -> dict:
+    if not _check_lock.acquire(blocking=False):
+        return {"ok": False, "error": "Signal check busy"}
+    if capture_busy():
+        _check_lock.release()
+        return {"ok": False, "error": "Capture running"}
+    duration_sec = min(max(duration_sec, 3), 15)
+    CAPTURE_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    wav = CAPTURE_DIR / f"check_{stamp}.wav"
+    try:
+        supervisorctl("stop", "dump1090")
+        time.sleep(1)
+        cmd = quick_check_cmd(freq_mhz, duration_sec, wav)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=duration_sec + 20)
+        supervisorctl("start", "dump1090")
+        if proc.returncode not in (0, 124) or not wav.exists():
+            return {"ok": False, "error": "Signal check failed", "freqMhz": freq_mhz}
+        snap = snapshot_signal(wav)
+        snap["freqMhz"] = freq_mhz
+        result = interpret_check(snap)
+        try:
+            wav.unlink()
+        except OSError:
+            pass
+        return result
+    except subprocess.TimeoutExpired:
+        supervisorctl("start", "dump1090")
+        return {"ok": False, "error": "Signal check timed out", "freqMhz": freq_mhz}
+    except Exception as e:
+        supervisorctl("start", "dump1090")
+        return {"ok": False, "error": str(e), "freqMhz": freq_mhz}
+    finally:
+        _check_lock.release()
 
 
 def read_capture_state() -> dict:
@@ -150,21 +202,33 @@ def start_capture(
         wav = CAPTURE_DIR / f"{label}_{stamp}.wav"
         png = CAPTURE_DIR / f"{label}_{stamp}.png"
         started = int(time.time())
-        _write_capture_state(
-            {
-                "active": True,
-                "freqMhz": freq_mhz,
-                "durationSec": duration_sec,
-                "label": label,
-                "passName": pass_name,
-                "wav": str(wav.name),
-                "startedTs": started,
-                "message": f"Recording {pass_name or label} @ {freq_mhz} MHz",
-            }
+        monitor_stop = threading.Event()
+        base_state = {
+            "active": True,
+            "freqMhz": freq_mhz,
+            "durationSec": duration_sec,
+            "label": label,
+            "passName": pass_name,
+            "wav": str(wav.name),
+            "startedTs": started,
+            "message": f"Recording {pass_name or label} @ {freq_mhz} MHz",
+            "signalState": "waiting",
+            "signalLevel": 0,
+        }
+        _write_capture_state(base_state)
+
+        def on_signal(patch: dict) -> None:
+            _patch_capture_state(patch)
+
+        monitor = threading.Thread(
+            target=run_capture_monitor,
+            args=(wav, monitor_stop, on_signal),
+            daemon=True,
         )
         log.info("Manual capture %s %.3f MHz %ss", label, freq_mhz, duration_sec)
         supervisorctl("stop", "dump1090")
         time.sleep(2)
+        monitor.start()
         cmd = [
             "timeout",
             str(duration_sec),
@@ -193,11 +257,14 @@ def start_capture(
             _capture_proc.kill()
             rc = -1
         finally:
+            monitor_stop.set()
+            monitor.join(timeout=3)
             with _capture_lock:
                 _capture_proc = None
             supervisorctl("start", "dump1090")
 
         ok = rc in (0, 124) and wav.exists() and wav.stat().st_size > 10000
+        sig = analyze_wav(wav) if ok else {}
         result = {
             "active": False,
             "ok": ok,
@@ -207,7 +274,8 @@ def start_capture(
             "wav": wav.name if wav.exists() else None,
             "wavUrl": f"/api/captures/{wav.name}" if wav.exists() else None,
             "size": wav.stat().st_size if wav.exists() else 0,
-            "message": "Recording saved" if ok else "Recording failed",
+            "message": sig.get("signalMessage") if sig and not sig.get("signalOk") else ("Recording saved" if ok else "Recording failed"),
+            **sig,
         }
         if ok and decode_apt:
             _write_capture_state({**result, "active": True, "message": "Decoding APT…"})
@@ -232,7 +300,7 @@ def start_capture(
             else:
                 result["decodeError"] = (dec.stderr or "")[-400:]
                 result["message"] = "WAV saved, APT decode failed"
-        if ok:
+        if ok and sig.get("signalOk"):
             try:
                 from satellite_log import log_satellite_signal
 
@@ -250,6 +318,13 @@ def start_capture(
                 )
             except Exception as e:
                 log.warning("satellite log failed: %s", e)
+        elif ok and sig and not sig.get("signalOk"):
+            log.warning("capture saved but no satellite signal: %s", sig.get("signalMessage"))
+        if ok:
+            if sig.get("signalOk"):
+                result["message"] = "Recording saved · satellite signal OK"
+            elif sig:
+                result["message"] = sig.get("signalMessage", "Recording saved")
         _write_capture_state(result)
 
     threading.Thread(target=worker, daemon=True).start()

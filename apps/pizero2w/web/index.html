@@ -552,6 +552,58 @@
       color: var(--muted);
       line-height: 1.4;
     }
+    .signal-panel {
+      width: 100%;
+      padding: 10px;
+      border: 2px solid var(--line);
+      background: var(--paper);
+    }
+    .signal-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .signal-label {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .signal-check-btn {
+      flex: 0 0 auto !important;
+      min-width: 0 !important;
+      padding: 6px 10px !important;
+      font-size: 10px !important;
+    }
+    .signal-bar {
+      height: 14px;
+      border: 2px solid var(--ink);
+      background: var(--scan);
+      position: relative;
+      overflow: hidden;
+    }
+    .signal-fill {
+      height: 100%;
+      width: 0;
+      transition: width 0.35s ease, background 0.2s;
+      background: var(--muted);
+    }
+    .signal-fill.waiting { background: var(--muted); }
+    .signal-fill.silence { background: #c44; }
+    .signal-fill.noise { background: #c90; }
+    .signal-fill.signal { background: #3a8; }
+    .signal-fill.strong { background: #1a6; }
+    .signal-hint {
+      margin-top: 6px;
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.35;
+    }
+    .signal-hint.warn { color: #a44; font-weight: 600; }
+    .signal-hint.ok { color: #286; font-weight: 600; }
+    .settings-pane .signal-panel { margin-bottom: 10px; }
     .settings-tabs {
       display: flex;
       border-bottom: 2px solid var(--line);
@@ -707,6 +759,15 @@
             <span class="mode-pill on" id="pillSignal">ADS-B</span>
             <span class="mode-pill" id="pillWifi">WiFi unknown</span>
             <span class="mode-pill ok" id="pillGps" hidden>GPS</span>
+          </div>
+          <div class="signal-panel" id="ctrlSignalPanel">
+            <div class="signal-head">
+              <span class="signal-label" id="ctrlSignalLabel">RF signal</span>
+              <button type="button" class="btn secondary signal-check-btn" id="ctrlSignalCheck1379">Check 137.9</button>
+              <button type="button" class="btn secondary signal-check-btn" id="ctrlSignalCheck1371">Check 137.1</button>
+            </div>
+            <div class="signal-bar"><div class="signal-fill waiting" id="ctrlSignalFill"></div></div>
+            <div class="signal-hint" id="ctrlSignalHint">Live meter during recording · 5s check pauses ADS-B briefly</div>
           </div>
           <div class="hex-note">
             LRPT decode is heavy on Pi Zero — record raw WAV, decode at home (SatDump).
@@ -865,6 +926,14 @@
           <div class="focus-stat"><b id="focusAzMax">—</b>Azimuth at max</div>
         </div>
         <div class="focus-meta" id="focusMeta"></div>
+        <div class="signal-panel" id="focusSignalPanel">
+          <div class="signal-head">
+            <span class="signal-label" id="focusSignalLabel">RF signal</span>
+            <button type="button" class="btn secondary signal-check-btn" id="focusSignalCheck">Check 5s</button>
+          </div>
+          <div class="signal-bar"><div class="signal-fill waiting" id="focusSignalFill"></div></div>
+          <div class="signal-hint" id="focusSignalHint">Check before recording — dipole toward satellite, clear sky</div>
+        </div>
         <div class="focus-cap">
           <button type="button" class="btn" id="focusRecord">Record pass</button>
           <button type="button" class="btn secondary" id="focusStop">Stop</button>
@@ -884,6 +953,79 @@
     let historyHex = { items: [], total: 0, totalPages: 1 };
     let lastMainView = "log";
     let settingsTab = "controls";
+
+    const SIGNAL_LABELS = {
+      waiting: "Waiting…",
+      silence: "Silence — no RF",
+      noise: "Noise only",
+      signal: "Satellite signal",
+      strong: "Strong signal",
+    };
+
+    function paintSignalMeter(prefix, data) {
+      const fill = document.getElementById(`${prefix}SignalFill`);
+      const hint = document.getElementById(`${prefix}SignalHint`);
+      const label = document.getElementById(`${prefix}SignalLabel`);
+      if (!fill) return;
+      const level = data?.signalLevel ?? 0;
+      const state = data?.signalState || "waiting";
+      fill.style.width = `${Math.max(2, level)}%`;
+      fill.className = `signal-fill ${state}`;
+      if (label) label.textContent = SIGNAL_LABELS[state] || state;
+      if (!hint) return;
+      hint.classList.remove("warn", "ok");
+      if (data?.signalMessage) {
+        hint.textContent = data.signalMessage;
+        hint.classList.toggle("ok", !!data.signalOk);
+        hint.classList.toggle("warn", data.signalOk === false);
+      } else if (data?.message) {
+        hint.textContent = data.message;
+        hint.classList.toggle("ok", !!data.ok);
+        hint.classList.toggle("warn", data.ok === false);
+      } else if (data?.active) {
+        const cov = data.signalCoverageLive;
+        hint.textContent =
+          cov != null
+            ? `Live: ${SIGNAL_LABELS[state] || state} · ${Math.round((cov || 0) * 100)}% windows with signal`
+            : SIGNAL_LABELS[state] || state;
+        if (state === "silence" || state === "noise") hint.classList.add("warn");
+        if (state === "signal" || state === "strong") hint.classList.add("ok");
+      } else {
+        hint.textContent =
+          prefix === "focus"
+            ? "Check before recording — dipole toward satellite, clear sky"
+            : "Live meter during recording · 5s check pauses ADS-B briefly";
+      }
+    }
+
+    async function runSignalCheck(body, btn) {
+      const prev = btn?.textContent;
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "Checking…";
+      }
+      try {
+        const data = await controlPost("/api/control/signal-check", body);
+        paintSignalMeter("focus", data);
+        paintSignalMeter("ctrl", data);
+        const st = document.getElementById("focusCapStatus");
+        if (st && data.message) st.textContent = data.message;
+        return data;
+      } catch (e) {
+        const hint = document.getElementById("focusSignalHint");
+        if (hint) {
+          hint.textContent = e.message;
+          hint.classList.add("warn");
+        }
+        throw e;
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = prev || "Check 5s";
+        }
+        refreshControl();
+      }
+    }
 
     function syncCtrlFeedback(text) {
       document.getElementById("ctrlStatus").textContent = text;
@@ -1133,11 +1275,18 @@
         const lines = [];
         if (data.capture?.active) {
           lines.push(`Recording: ${data.capture.message || "…"}`);
+          const st = data.capture.signalState;
+          if (st && st !== "waiting") {
+            lines.push(`RF: ${SIGNAL_LABELS[st] || st} (${data.capture.signalLevel || 0}%)`);
+          }
         } else if (data.capture?.message) {
           lines.push(data.capture.message);
+          if (data.capture.signalOk === false) lines.push("⚠ No clear satellite signal in recording");
           if (data.capture.wavUrl) lines.push(`WAV: ${data.capture.wavUrl}`);
           if (data.capture.pngUrl) lines.push(`PNG: ${data.capture.pngUrl}`);
         }
+        paintSignalMeter("focus", data.capture);
+        paintSignalMeter("ctrl", data.capture);
         if (data.scheduler?.nextPass) {
           const p = data.scheduler.nextPass;
           lines.push(`Next pass: ${p.name} in ${p.startInMin} min`);
@@ -1282,7 +1431,12 @@
         : `Record ${pass.name} · ${pass.freqMhz} MHz · ${mode} · ${Math.round(dur / 60)} min`;
       stop.disabled = !busy;
       if (busy && lastCaptureState?.message) {
-        st.textContent = lastCaptureState.message + " · ADS-B off";
+        const rfState = lastCaptureState.signalState;
+        const rf =
+          rfState && rfState !== "waiting"
+            ? ` · RF: ${SIGNAL_LABELS[rfState] || rfState}`
+            : "";
+        st.textContent = lastCaptureState.message + " · ADS-B off" + rf;
       } else if (timing.phase === "after") {
         st.textContent = "Pass ended — recording no longer useful for this pass.";
       } else if (timing.phase === "before") {
@@ -1679,6 +1833,14 @@
       }
     }
 
+    document.getElementById("focusSignalCheck").onclick = () => {
+      if (focusIdx === null) return;
+      runSignalCheck({ passIndex: focusIdx }, document.getElementById("focusSignalCheck"));
+    };
+    document.getElementById("ctrlSignalCheck1379").onclick = () =>
+      runSignalCheck({ preset: "lrpt1379" }, document.getElementById("ctrlSignalCheck1379"));
+    document.getElementById("ctrlSignalCheck1371").onclick = () =>
+      runSignalCheck({ preset: "lrpt1371" }, document.getElementById("ctrlSignalCheck1371"));
     document.getElementById("navLog").onclick = () => showMainView("log");
     document.getElementById("navPlan").onclick = () => showMainView("plan");
     document.getElementById("navSettings").onclick = () => {
@@ -1704,7 +1866,7 @@
     refreshControl();
     refreshLogs();
     setInterval(refreshLive, 5000);
-    setInterval(refreshControl, 5000);
+    setInterval(refreshControl, 2000);
     setInterval(() => {
       if (!document.getElementById("viewSettings").hidden && settingsTab === "console") {
         refreshLogs();

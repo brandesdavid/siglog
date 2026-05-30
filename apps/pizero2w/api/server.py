@@ -31,6 +31,7 @@ from manual_capture import (
     queue_host_command,
     read_capture_state,
     read_host_result,
+    quick_signal_check,
     start_capture,
     stop_capture,
     supervisorctl,
@@ -837,6 +838,26 @@ def api_control_status():
             "system": system,
         }
     )
+
+
+@app.route("/api/control/signal-check", methods=["POST"])
+def api_control_signal_check():
+    body = request.get_json(silent=True) or {}
+    if body.get("passIndex") is not None:
+        cached = read_plan_cache()
+        idx = int(body["passIndex"])
+        passes = (cached or {}).get("passes") or []
+        if idx < 0 or idx >= len(passes):
+            return jsonify({"ok": False, "error": "pass not found"}), 404
+        freq = float(passes[idx]["freqMhz"])
+    elif body.get("freqMhz") is not None:
+        freq = float(body["freqMhz"])
+    elif body.get("preset") in CAPTURE_PRESETS:
+        freq, _ = CAPTURE_PRESETS[body["preset"]]
+    else:
+        return jsonify({"ok": False, "error": "passIndex, freqMhz, or preset required"}), 400
+    duration = int(body.get("durationSec", 5))
+    return jsonify(quick_signal_check(freq, duration))
 
 
 @app.route("/api/control/capture", methods=["POST"])
