@@ -1,7 +1,6 @@
 services:
   siglog:
     image: ghcr.io/brandesdavid/siglog-pi:latest
-    build: .
     container_name: siglog
     restart: unless-stopped
     privileged: false

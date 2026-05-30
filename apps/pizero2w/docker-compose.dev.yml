@@ -1,5 +1,7 @@
 services:
   siglog:
+    build: .
+    image: siglog-pi:dev
     network_mode: bridge
     ports:
       - "8080:80"
