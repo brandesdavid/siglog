@@ -10,6 +10,7 @@ from typing import Optional
 
 from flask import Flask, jsonify, request, send_from_directory
 
+from plan_cache import enrich_plan_passes, pass_capture_params, read_plan_cache, write_plan_cache
 from satellite_passes import passes_with_tracks
 from hex_lookup import (
     all_lookups,
@@ -18,7 +19,10 @@ from hex_lookup import (
     ensure_table as ensure_hex_table,
     get_cached,
     is_icao_hex,
+    normalize_hex_only_rarity,
+    reclassify_all_decoded,
 )
+from rarity import classify_rarity
 from manual_capture import (
     CAPTURE_DIR,
     capture_busy,
@@ -68,19 +72,6 @@ state = {
     "mode": "ADS-B",
 }
 state_lock = threading.Lock()
-
-MILITARY_PREFIXES = [
-    "GAF",
-    "NAF",
-    "RFR",
-    "RAF",
-    "USAF",
-    "CTM",
-    "CASA",
-    "SVF",
-]
-
-EMERGENCY_SQUAWKS = {"7700", "7600", "7500"}
 
 FAKE_AIRCRAFT = [
     {"flight": "DLH456  ", "alt_baro": 10500, "gs": 420, "t": "A320", "squawk": "1000", "hex": "3c6750"},
@@ -136,6 +127,10 @@ def init_db():
 
 db_con = init_db()
 ensure_hex_table(db_con)
+fixed = normalize_hex_only_rarity(db_con)
+if fixed:
+    log.info("Set %d hex-only log entries from RARE to COMMON", fixed)
+reclassify_all_decoded(db_con)
 EXPORT_DIR = "/app/data/exports"
 
 
@@ -198,33 +193,6 @@ def log_signal(sig: dict):
 def total_signals() -> int:
     row = db_con.execute("SELECT COUNT(*) FROM signals").fetchone()
     return row[0] if row else 0
-
-
-def classify_rarity(ac: dict) -> str:
-    callsign = ac.get("flight", "").strip().upper()
-    squawk = ac.get("squawk", "")
-    hex_id = ac.get("hex", "")
-
-    if squawk in EMERGENCY_SQUAWKS:
-        return "LEGEND"
-
-    if not hex_id and not callsign:
-        return "LEGEND"
-
-    if not hex_id:
-        return "EPIC"
-
-    for prefix in MILITARY_PREFIXES:
-        if callsign.startswith(prefix):
-            return "EPIC"
-
-    if not callsign:
-        return "RARE"
-
-    if callsign.startswith("N") and 4 <= len(callsign) <= 6:
-        return "UNCOMMON"
-
-    return "COMMON"
 
 
 def format_detail(ac: dict) -> str:
@@ -704,6 +672,61 @@ def api_map():
     )
 
 
+def _plan_coords() -> tuple[float, float]:
+    merge_scheduler_state()
+    with state_lock:
+        lat = state.get("lat")
+        lng = state.get("lng")
+    body = request.get_json(silent=True) or {}
+    if body.get("lat") is not None:
+        lat = float(body["lat"])
+    elif request.args.get("lat") is not None:
+        lat = float(request.args.get("lat"))
+    elif lat is None:
+        lat = float(os.getenv("SIGLOG_LAT", "52.52"))
+    if body.get("lng") is not None:
+        lng = float(body["lng"])
+    elif request.args.get("lng") is not None:
+        lng = float(request.args.get("lng"))
+    elif lng is None:
+        lng = float(os.getenv("SIGLOG_LON", "13.405"))
+    return lat, lng
+
+
+@app.route("/api/plan", methods=["GET"])
+def api_plan_get():
+    data = read_plan_cache()
+    if not data:
+        return jsonify({"ok": False, "passes": [], "message": "No saved plan"}), 404
+    data = enrich_plan_passes(data)
+    data["ok"] = True
+    data["fromCache"] = True
+    return jsonify(data)
+
+
+@app.route("/api/plan/fetch", methods=["POST"])
+def api_plan_fetch():
+    lat, lng = _plan_coords()
+    hours = float(request.args.get("hours", "48"))
+    min_el = float(request.args.get("minEl", os.getenv("NOAA_MIN_ELEVATION", "15")))
+    try:
+        passes = passes_with_tracks(lat, lng, hours=hours, min_el=min_el)
+    except Exception as e:
+        log.exception("api_plan_fetch: %s", e)
+        return jsonify({"ok": False, "error": str(e)}), 502
+    payload = {
+        "observer": {"lat": lat, "lng": lng},
+        "passes": passes,
+        "hours": hours,
+        "minEl": min_el,
+    }
+    write_plan_cache(payload)
+    out = enrich_plan_passes(payload)
+    out["ok"] = True
+    out["fromCache"] = False
+    return jsonify(out)
+
+
 @app.route("/api/passes")
 def api_passes():
     merge_scheduler_state()
@@ -815,6 +838,26 @@ def api_control_status():
 @app.route("/api/control/capture", methods=["POST"])
 def api_control_capture():
     body = request.get_json(silent=True) or {}
+    if body.get("passIndex") is not None or body.get("pass"):
+        if body.get("pass"):
+            pass_row = body["pass"]
+        else:
+            cached = read_plan_cache()
+            idx = int(body["passIndex"])
+            passes = (cached or {}).get("passes") or []
+            if idx < 0 or idx >= len(passes):
+                return jsonify({"ok": False, "error": "pass not found"}), 404
+            pass_row = passes[idx]
+        freq, duration, label, decode_apt = pass_capture_params(pass_row)
+        return jsonify(
+            start_capture(
+                freq,
+                duration,
+                label,
+                decode_apt=decode_apt,
+                pass_name=pass_row.get("name"),
+            )
+        )
     preset = body.get("preset", "lrpt1379")
     if preset not in CAPTURE_PRESETS:
         return jsonify({"ok": False, "error": "unknown preset"}), 400

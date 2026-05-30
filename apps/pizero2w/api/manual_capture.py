@@ -113,6 +113,7 @@ def start_capture(
     duration_sec: int,
     label: str,
     decode_apt: bool = False,
+    pass_name: str | None = None,
 ) -> dict:
     if capture_busy():
         return {"ok": False, "error": "Capture already running"}
@@ -132,9 +133,10 @@ def start_capture(
                 "freqMhz": freq_mhz,
                 "durationSec": duration_sec,
                 "label": label,
+                "passName": pass_name,
                 "wav": str(wav.name),
                 "startedTs": started,
-                "message": f"Recording {label} @ {freq_mhz} MHz",
+                "message": f"Recording {pass_name or label} @ {freq_mhz} MHz",
             }
         )
         log.info("Manual capture %s %.3f MHz %ss", label, freq_mhz, duration_sec)

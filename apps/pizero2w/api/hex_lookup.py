@@ -5,6 +5,8 @@ import time
 import urllib.error
 import urllib.request
 
+from rarity import classify_rarity_decoded
+
 log = logging.getLogger("siglog.hex_lookup")
 
 ADSDB_URL = "https://api.adsbdb.com/v0/aircraft/{hex_id}"
@@ -96,12 +98,14 @@ def decode_hex(con: sqlite3.Connection, hex_id: str, force: bool = False) -> dic
     if not force:
         cached = get_cached(con, hex_id)
         if cached:
-            return {"ok": True, "cached": True, **cached}
+            rarity = refresh_signal_rarity_for_hex(con, hex_id)
+            return {"ok": True, "cached": True, "rarity": rarity, **cached}
     try:
         info = fetch_remote(hex_id)
         store(con, info)
         row = get_cached(con, hex_id)
-        return {"ok": True, "cached": False, **(row or info)}
+        rarity = refresh_signal_rarity_for_hex(con, hex_id)
+        return {"ok": True, "cached": False, "rarity": rarity, **(row or info)}
     except urllib.error.HTTPError as e:
         log.warning("adsbdb HTTP %s for %s", e.code, hex_id)
         return {"hex": hex_id, "ok": False, "error": f"HTTP {e.code}"}
@@ -138,7 +142,39 @@ def decode_all_pending(con: sqlite3.Connection) -> dict:
         else:
             failed += 1
         time.sleep(0.5)
+    reclassify_all_decoded(con)
     return {"decoded": ok, "failed": failed, "pending": len(pending), "results": results}
+
+
+def refresh_signal_rarity_for_hex(con: sqlite3.Connection, hex_id: str) -> str | None:
+    info = get_cached(con, hex_id)
+    if not info:
+        return None
+    rarity = classify_rarity_decoded(info)
+    con.execute(
+        "UPDATE signals SET rarity = ? "
+        "WHERE lower(COALESCE(NULLIF(hex, ''), aircraft_key)) = ?",
+        (rarity, hex_id.lower()),
+    )
+    con.commit()
+    return rarity
+
+
+def normalize_hex_only_rarity(con: sqlite3.Connection) -> int:
+    cur = con.execute(
+        "UPDATE signals SET rarity = 'COMMON' "
+        "WHERE callsign = 'UNKNOWN' AND rarity = 'RARE'"
+    )
+    con.commit()
+    return cur.rowcount
+
+
+def reclassify_all_decoded(con: sqlite3.Connection) -> int:
+    n = 0
+    for hex_id in all_lookups(con):
+        if refresh_signal_rarity_for_hex(con, hex_id):
+            n += 1
+    return n
 
 
 def all_lookups(con: sqlite3.Connection) -> dict[str, dict]:

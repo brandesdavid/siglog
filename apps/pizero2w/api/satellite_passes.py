@@ -220,10 +220,56 @@ def pass_ground_track(pass_obj: Pass, steps: int = 48) -> list[dict]:
     return points
 
 
+def _pass_satellite(pass_obj: Pass):
+    ts, by_name = _load_satellites()
+    target = next((t for t in TARGETS if t.label == pass_obj.name), None)
+    if target is None:
+        return None, None
+    sat = _resolve_target(by_name, target)
+    if sat is None:
+        return None, None
+    return ts, sat
+
+
+def pass_observer_profile(
+    pass_obj: Pass, lat: float, lon: float, steps: int = 72
+) -> list[dict]:
+    ts, sat = _pass_satellite(pass_obj)
+    if sat is None:
+        return []
+    observer = wgs84.latlon(lat, lon)
+    t_aos = ts.from_datetime(pass_obj.aos)
+    t_los = ts.from_datetime(pass_obj.los)
+    points: list[dict] = []
+    for i in range(steps):
+        frac = i / max(steps - 1, 1)
+        t = t_aos + (t_los - t_aos) * frac
+        el, az, _ = (sat - observer).at(t).altaz()
+        points.append(
+            {
+                "t": t.utc_datetime().replace(tzinfo=timezone.utc).isoformat(),
+                "el": round(float(el.degrees), 1),
+                "az": round(float(az.degrees), 1),
+            }
+        )
+    return points
+
+
+def pass_max_point(profile: list[dict]) -> dict | None:
+    if not profile:
+        return None
+    best = max(profile, key=lambda p: p["el"])
+    return dict(best)
+
+
 def passes_with_tracks(lat: float, lon: float, hours: float = 48, min_el: float = 15.0) -> list[dict]:
     out = []
     for p in predict_passes(lat, lon, hours=hours, min_el=min_el):
         d = p.to_dict()
         d["track"] = pass_ground_track(p)
+        profile = pass_observer_profile(p, lat, lon)
+        d["profile"] = profile
+        d["maxPoint"] = pass_max_point(profile)
         out.append(d)
     return out
+
