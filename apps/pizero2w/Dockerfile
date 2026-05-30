@@ -53,7 +53,7 @@ FROM python-deps AS noaa-apt
 
 ARG NOAA_APT_VERSION=1.4.1
 RUN curl -fsSL -o /tmp/noaa-apt.zip \
-      "https://github.com/martinber/noaa-apt/releases/download/v${NOAA_APT_VERSION}/noaa-apt-${NOAA_APT_VERSION}-aarch64-unknown-linux-gnu.zip" \
+      "https://github.com/martinber/noaa-apt/releases/download/v${NOAA_APT_VERSION}/noaa-apt-${NOAA_APT_VERSION}-aarch64-linux-gnu-nogui.zip" \
     && unzip -j /tmp/noaa-apt.zip -d /usr/local/bin \
     && chmod +x /usr/local/bin/noaa-apt \
     && rm /tmp/noaa-apt.zip
