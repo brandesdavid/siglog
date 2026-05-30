@@ -603,7 +603,76 @@
     }
     .signal-hint.warn { color: #a44; font-weight: 600; }
     .signal-hint.ok { color: #286; font-weight: 600; }
+    .signal-disclaimer {
+      margin-top: 8px;
+      padding: 8px 10px;
+      font-size: 10px;
+      line-height: 1.45;
+      border: 1px dashed #a66;
+      background: #fff8f0;
+      color: #633;
+    }
     .settings-pane .signal-panel { margin-bottom: 10px; }
+    .radio-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 10px;
+      align-items: flex-end;
+      border-bottom: 1px solid var(--line-light);
+    }
+    .radio-field label {
+      display: block;
+      font-size: 10px;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+    .radio-field input[type="number"],
+    .radio-field input[type="range"] {
+      width: 100%;
+      min-width: 120px;
+    }
+    .radio-presets {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--line-light);
+    }
+    .radio-presets .btn { font-size: 10px; padding: 6px 8px; }
+    .radio-visuals {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+      padding: 10px;
+    }
+    .radio-viz {
+      border: 2px solid var(--line);
+      background: #0a0a12;
+    }
+    .radio-viz-h {
+      padding: 6px 8px;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      background: var(--scan);
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+    }
+    .radio-viz canvas {
+      display: block;
+      width: 100%;
+      height: auto;
+    }
+    #radioWaterfall { height: 140px; }
+    #radioRfWaterfall { height: 120px; }
+    .radio-status {
+      padding: 8px 10px;
+      font-size: 11px;
+      color: var(--muted);
+      border-top: 1px solid var(--line-light);
+    }
     .settings-tabs {
       display: flex;
       border-bottom: 2px solid var(--line);
@@ -753,6 +822,7 @@
           <button type="button" class="settings-tab active" id="setTabControls">Controls</button>
           <button type="button" class="settings-tab" id="setTabTiers">Tiers</button>
           <button type="button" class="settings-tab" id="setTabConsole">Console</button>
+          <button type="button" class="settings-tab" id="setTabRadio">FM Radio</button>
         </div>
         <div class="settings-pane active" id="setPaneControls">
           <div class="mode-strip">
@@ -768,6 +838,9 @@
             </div>
             <div class="signal-bar"><div class="signal-fill waiting" id="ctrlSignalFill"></div></div>
             <div class="signal-hint" id="ctrlSignalHint">Live meter during recording · 5s check pauses ADS-B briefly</div>
+            <p class="signal-disclaimer">
+              Signal meter is a heuristic (FM audio level on the Pi). It does not decode LRPT and does not guarantee a usable image at home. Always verify with Check 5s before a long recording.
+            </p>
           </div>
           <div class="hex-note">
             LRPT decode is heavy on Pi Zero — record raw WAV, decode at home (SatDump).
@@ -866,6 +939,42 @@
           </div>
           <pre class="log-view tall" id="logView">Loading…</pre>
         </div>
+        <div class="settings-pane" id="setPaneRadio">
+          <p class="signal-disclaimer">
+            Experimental FM broadcast listen mode (87.5–108 MHz). Pauses ADS-B and uses the only RTL-SDR. Legal broadcast FM only. Audio quality and spectrum are best-effort on Pi Zero — not Hi-Fi.
+          </p>
+          <div class="radio-toolbar">
+            <div class="radio-field">
+              <label for="radioFreq">MHz</label>
+              <input id="radioFreq" type="number" step="0.05" min="87.5" max="108" value="100.0" />
+            </div>
+            <div class="radio-field">
+              <label for="radioVol">Volume</label>
+              <input id="radioVol" type="range" min="0" max="1" step="0.05" value="0.85" />
+            </div>
+            <button type="button" class="btn" id="radioStart">Listen</button>
+            <button type="button" class="btn secondary" id="radioStop">Stop</button>
+            <button type="button" class="btn secondary" id="radioScan">RF scan 88–108</button>
+          </div>
+          <div class="radio-presets">
+            <button type="button" class="btn secondary radio-preset" data-mhz="87.9">87.9</button>
+            <button type="button" class="btn secondary radio-preset" data-mhz="94.3">94.3</button>
+            <button type="button" class="btn secondary radio-preset" data-mhz="100.0">100.0</button>
+            <button type="button" class="btn secondary radio-preset" data-mhz="104.6">104.6</button>
+            <button type="button" class="btn secondary radio-preset" data-mhz="107.7">107.7</button>
+          </div>
+          <div class="radio-visuals">
+            <div class="radio-viz">
+              <div class="radio-viz-h">Live audio spectrogram (while listening — not RF)</div>
+              <canvas id="radioWaterfall" width="640" height="140"></canvas>
+            </div>
+            <div class="radio-viz">
+              <div class="radio-viz-h">RF band waterfall (rtl_power snapshots — pauses audio)</div>
+              <canvas id="radioRfWaterfall" width="640" height="120"></canvas>
+            </div>
+          </div>
+          <div class="radio-status" id="radioStatus">Connect phone to Pi hotspot · tap Listen (mobile may require a tap for audio)</div>
+        </div>
       </div>
     </div>
     <div id="viewPlan" hidden>
@@ -933,6 +1042,9 @@
           </div>
           <div class="signal-bar"><div class="signal-fill waiting" id="focusSignalFill"></div></div>
           <div class="signal-hint" id="focusSignalHint">Check before recording — dipole toward satellite, clear sky</div>
+          <p class="signal-disclaimer">
+            Not guaranteed: meter shows RF/FM level only, not decoded LRPT. A green bar does not promise a good image after SatDump at home.
+          </p>
         </div>
         <div class="focus-cap">
           <button type="button" class="btn" id="focusRecord">Record pass</button>
@@ -1035,7 +1147,7 @@
 
     function showSettingsTab(tab) {
       settingsTab = tab;
-      for (const t of ["controls", "tiers", "console"]) {
+      for (const t of ["controls", "tiers", "console", "radio"]) {
         document.getElementById(`setTab${t[0].toUpperCase()}${t.slice(1)}`).classList.toggle(
           "active", t === tab
         );
@@ -1046,6 +1158,9 @@
       if (tab === "console") {
         logStickBottom = true;
         refreshLogs();
+      }
+      if (tab === "radio") {
+        syncRadioUiFromServer();
       }
     }
 
@@ -1119,7 +1234,9 @@
     }
 
     function signalPillClass(signal) {
-      return signal === "ADS-B" ? "mode-pill on" : "mode-pill warn";
+      if (signal === "ADS-B") return "mode-pill on";
+      if (signal === "FM_RADIO") return "mode-pill ok";
+      return "mode-pill warn";
     }
 
     function updateSystemMode(system) {
@@ -1832,6 +1949,235 @@
         planTickTimer = setInterval(tickPlanUi, 1000);
       }
     }
+
+    let radioCtx = null;
+    let radioScript = null;
+    let radioGain = null;
+    let radioAnalyser = null;
+    let radioStreamAbort = null;
+    let radioPcmQueue = [];
+    let radioWaterfallId = null;
+    let radioRfRows = [];
+
+    function stopRadioClient() {
+      if (radioWaterfallId) cancelAnimationFrame(radioWaterfallId);
+      radioWaterfallId = null;
+      if (radioStreamAbort) radioStreamAbort.abort();
+      radioStreamAbort = null;
+      if (radioScript) {
+        radioScript.disconnect();
+        radioScript.onaudioprocess = null;
+        radioScript = null;
+      }
+      if (radioAnalyser) {
+        radioAnalyser.disconnect();
+        radioAnalyser = null;
+      }
+      if (radioGain) {
+        radioGain.disconnect();
+        radioGain = null;
+      }
+      if (radioCtx) {
+        radioCtx.close().catch(() => {});
+        radioCtx = null;
+      }
+      radioPcmQueue = [];
+    }
+
+    function setupRadioAudio() {
+      radioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+      radioAnalyser = radioCtx.createAnalyser();
+      radioAnalyser.fftSize = 1024;
+      radioAnalyser.smoothingTimeConstant = 0.35;
+      radioGain = radioCtx.createGain();
+      radioGain.gain.value = parseFloat(document.getElementById("radioVol").value);
+      radioScript = radioCtx.createScriptProcessor(4096, 0, 1);
+      radioScript.onaudioprocess = (e) => {
+        const out = e.outputBuffer.getChannelData(0);
+        for (let i = 0; i < out.length; i++) {
+          out[i] = radioPcmQueue.length ? radioPcmQueue.shift() : 0;
+        }
+      };
+      radioScript.connect(radioAnalyser);
+      radioAnalyser.connect(radioGain);
+      radioGain.connect(radioCtx.destination);
+      startRadioWaterfallLoop();
+    }
+
+    async function pumpRadioStream() {
+      radioStreamAbort = new AbortController();
+      const res = await fetch("/api/radio/stream", { signal: radioStreamAbort.signal });
+      if (!res.ok) throw new Error("Stream unavailable");
+      const reader = res.body.getReader();
+      let leftover = new Uint8Array(0);
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const merged = new Uint8Array(leftover.length + value.length);
+        merged.set(leftover);
+        merged.set(value, leftover.length);
+        const usable = merged.length - (merged.length % 2);
+        for (let i = 0; i < usable; i += 2) {
+          let s = merged[i] | (merged[i + 1] << 8);
+          if (s >= 32768) s -= 65536;
+          radioPcmQueue.push(s / 32768);
+        }
+        leftover = merged.slice(usable);
+        if (radioPcmQueue.length > 48000 * 3) {
+          radioPcmQueue.splice(0, radioPcmQueue.length - 48000 * 2);
+        }
+      }
+    }
+
+    function startRadioWaterfallLoop() {
+      const canvas = document.getElementById("radioWaterfall");
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      const w = canvas.width;
+      const h = canvas.height;
+      const draw = () => {
+        radioWaterfallId = requestAnimationFrame(draw);
+        if (!radioAnalyser) return;
+        ctx.drawImage(canvas, 0, 0, w, h - 1, 0, 1, w, h - 1);
+        const data = new Uint8Array(radioAnalyser.frequencyBinCount);
+        radioAnalyser.getByteFrequencyData(data);
+        for (let x = 0; x < w; x++) {
+          const i = Math.floor((x / w) * data.length);
+          const v = data[i];
+          ctx.fillStyle = `rgb(${Math.min(255, v + 40)}, ${Math.floor(v * 0.4)}, ${255 - v})`;
+          ctx.fillRect(x, h - 1, 1, 1);
+        }
+      };
+      draw();
+    }
+
+    function dbToColor(db, minDb, maxDb) {
+      const t = Math.max(0, Math.min(1, (db - minDb) / (maxDb - minDb)));
+      const r = Math.floor(t * 255);
+      const g = Math.floor(t * 180);
+      const b = Math.floor((1 - t) * 200 + 40);
+      return `rgb(${r},${g},${b})`;
+    }
+
+    function pushRfSpectrumRow(spec) {
+      const canvas = document.getElementById("radioRfWaterfall");
+      if (!canvas || !spec?.db?.length) return;
+      radioRfRows.push(spec.db);
+      if (radioRfRows.length > 100) radioRfRows.shift();
+      const ctx = canvas.getContext("2d");
+      const w = canvas.width;
+      const h = canvas.height;
+      ctx.fillStyle = "#0a0a12";
+      ctx.fillRect(0, 0, w, h);
+      const minDb = Math.min(...radioRfRows.flat()) - 2;
+      const maxDb = Math.max(...radioRfRows.flat()) + 2;
+      const rowH = Math.max(1, Math.floor(h / radioRfRows.length));
+      radioRfRows.forEach((row, ri) => {
+        const y = ri * rowH;
+        for (let x = 0; x < w; x++) {
+          const i = Math.floor((x / w) * row.length);
+          ctx.fillStyle = dbToColor(row[i], minDb, maxDb);
+          ctx.fillRect(x, y, 1, rowH);
+        }
+      });
+      if (spec.freqsMhz?.length) {
+        ctx.fillStyle = "#888";
+        ctx.font = "9px monospace";
+        ctx.fillText(`${spec.lowMhz} MHz`, 4, h - 4);
+        ctx.fillText(`${spec.highMhz} MHz`, w - 52, h - 4);
+      }
+    }
+
+    async function startFmRadio() {
+      stopRadioClient();
+      const freq = parseFloat(document.getElementById("radioFreq").value);
+      const st = document.getElementById("radioStatus");
+      st.textContent = "Starting… ADS-B pauses";
+      try {
+        const data = await controlPost("/api/radio/start", { freqMhz: freq });
+        st.textContent = data.message || "Listening…";
+        setupRadioAudio();
+        if (radioCtx?.state === "suspended") await radioCtx.resume();
+        pumpRadioStream().catch(() => {
+          if (document.getElementById("radioStatus")) {
+            document.getElementById("radioStatus").textContent = "Stream ended";
+          }
+          stopRadioClient();
+          refreshControl();
+        });
+        refreshControl();
+      } catch (e) {
+        st.textContent = e.message;
+      }
+    }
+
+    async function stopFmRadio() {
+      stopRadioClient();
+      try {
+        const d = await controlPost("/api/radio/stop");
+        document.getElementById("radioStatus").textContent = d.message || "Stopped";
+        refreshControl();
+      } catch (e) {
+        document.getElementById("radioStatus").textContent = e.message;
+      }
+    }
+
+    async function scanRfBand() {
+      const st = document.getElementById("radioStatus");
+      stopRadioClient();
+      st.textContent = "RF scan ~3s — pauses FM and ADS-B…";
+      try {
+        const spec = await fetch("/api/radio/spectrum").then((r) => r.json());
+        if (!spec.ok) throw new Error(spec.error || "Scan failed");
+        pushRfSpectrumRow(spec);
+        st.textContent = spec.message || "Scan done";
+        refreshControl();
+        if (spec.freqsMhz?.length && document.getElementById("radioFreq")) {
+          let bestI = 0;
+          let bestDb = spec.db[0];
+          spec.db.forEach((v, i) => {
+            if (v > bestDb) {
+              bestDb = v;
+              bestI = i;
+            }
+          });
+          st.textContent += ` · strongest ~${spec.freqsMhz[bestI]} MHz`;
+        }
+      } catch (e) {
+        st.textContent = e.message;
+      }
+    }
+
+    async function syncRadioUiFromServer() {
+      try {
+        const data = await fetch("/api/radio/status").then((r) => r.json());
+        const st = document.getElementById("radioStatus");
+        if (data.radio?.active) {
+          if (st) st.textContent = data.radio.message || `FM ${data.radio.freqMhz} MHz`;
+          if (data.radio.freqMhz) {
+            document.getElementById("radioFreq").value = data.radio.freqMhz;
+          }
+          if (!radioCtx) {
+            setupRadioAudio();
+            if (radioCtx?.state === "suspended") await radioCtx.resume();
+            pumpRadioStream().catch(() => stopRadioClient());
+          }
+        }
+      } catch (_) {}
+    }
+
+    document.getElementById("setTabRadio").onclick = () => showSettingsTab("radio");
+    document.getElementById("radioStart").onclick = startFmRadio;
+    document.getElementById("radioStop").onclick = stopFmRadio;
+    document.getElementById("radioScan").onclick = scanRfBand;
+    document.getElementById("radioVol").oninput = (e) => {
+      if (radioGain) radioGain.gain.value = parseFloat(e.target.value);
+    };
+    document.querySelectorAll(".radio-preset").forEach((btn) => {
+      btn.onclick = () => {
+        document.getElementById("radioFreq").value = btn.dataset.mhz;
+      };
+    });
 
     document.getElementById("focusSignalCheck").onclick = () => {
       if (focusIdx === null) return;

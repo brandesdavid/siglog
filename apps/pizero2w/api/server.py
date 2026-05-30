@@ -8,7 +8,7 @@ import random
 import gps
 from typing import Optional
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory, Response
 
 from plan_cache import enrich_plan_passes, pass_capture_params, read_plan_cache, write_plan_cache
 from satellite_log import refresh_satellite_rarities
@@ -37,6 +37,14 @@ from manual_capture import (
     supervisorctl,
 )
 from log_reader import read_logs
+from fm_radio import (
+    read_radio_state,
+    radio_busy,
+    rf_spectrum_sweep,
+    start_radio,
+    stop_radio,
+    stream_chunks,
+)
 
 DUMP1090_JSON = os.getenv("DUMP1090_JSON", "/app/data/dump1090/aircraft.json")
 API_PORT = int(os.getenv("API_PORT", 80))
@@ -786,9 +794,13 @@ def parse_wifi_from_host(text: str | None) -> dict:
 
 
 def build_system_status(
-    cap: dict, sch_mode: str, host_text: str | None, gps_locked: bool
+    cap: dict, sch_mode: str, host_text: str | None, gps_locked: bool, radio: dict | None = None
 ) -> dict:
-    if cap.get("active"):
+    radio = radio or {}
+    if radio.get("active"):
+        signal = "FM_RADIO"
+        signal_detail = radio.get("message") or f"FM {radio.get('freqMhz', '')} MHz"
+    elif cap.get("active"):
         msg = cap.get("message") or ""
         if "Decoding" in msg:
             signal = "APT_DECODE"
@@ -818,6 +830,7 @@ def build_system_status(
 def api_control_status():
     merge_scheduler_state()
     cap = read_capture_state()
+    radio = read_radio_state()
     host_text = read_host_result()
     with state_lock:
         sched = {
@@ -826,17 +839,63 @@ def api_control_status():
             "mode": state.get("mode"),
         }
         system = build_system_status(
-            cap, state.get("mode", "ADS-B"), host_text, state.get("gpsLocked")
+            cap, state.get("mode", "ADS-B"), host_text, state.get("gpsLocked"), radio
         )
     return jsonify(
         {
             "capture": cap,
             "captureBusy": capture_busy(),
+            "radio": radio,
+            "radioBusy": radio_busy(),
             "captures": list_captures(),
             "hostResult": host_text,
             "scheduler": sched,
             "system": system,
         }
+    )
+
+
+@app.route("/api/radio/start", methods=["POST"])
+def api_radio_start():
+    body = request.get_json(silent=True) or {}
+    if body.get("freqMhz") is None:
+        return jsonify({"ok": False, "error": "freqMhz required"}), 400
+    return jsonify(start_radio(float(body["freqMhz"])))
+
+
+@app.route("/api/radio/stop", methods=["POST"])
+def api_radio_stop():
+    return jsonify(stop_radio())
+
+
+@app.route("/api/radio/status")
+def api_radio_status():
+    return jsonify({"radio": read_radio_state(), "radioBusy": radio_busy()})
+
+
+@app.route("/api/radio/spectrum")
+def api_radio_spectrum():
+    return jsonify(rf_spectrum_sweep())
+
+
+@app.route("/api/radio/stream")
+def api_radio_stream():
+    if not radio_busy():
+        return jsonify({"error": "FM radio not active"}), 404
+
+    def generate():
+        for chunk in stream_chunks():
+            yield chunk
+
+    return Response(
+        generate(),
+        mimetype="application/octet-stream",
+        headers={
+            "Cache-Control": "no-cache, no-store",
+            "X-Audio-Sample-Rate": "48000",
+            "X-Audio-Channels": "1",
+            "X-Audio-Format": "s16le",
+        },
     )
 
 
