@@ -1,0 +1,162 @@
+#!/bin/bash
+set -euo pipefail
+
+HOTSPOT_SSID="${SIGLOG_HOTSPOT_SSID:-siglog-pi}"
+HOTSPOT_PASSWORD="${SIGLOG_HOTSPOT_PASSWORD:-siglog123}"
+HOTSPOT_CONN="${SIGLOG_HOTSPOT_CONN:-Hotspot}"
+HOME_PRIO="${SIGLOG_HOME_PRIO:-200}"
+HOTSPOT_PRIO="${SIGLOG_HOTSPOT_PRIO:-50}"
+
+usage() {
+  cat <<EOF
+siglog-net — WiFi ohne Indoor/Outdoor-Umschalten per SSH
+
+  auto      Einmal einrichten: Heim-WLAN bevorzugt, Hotspot Fallback (empfohlen)
+  status    Zeigt Modus, IP, erreichbare URLs
+  hotspot   Hotspot jetzt an (Notfall / Test)
+  wifi      Hotspot aus, Heim-WLAN suchen
+  leave     Wie auto — vor dem Rausgehen einmal per SSH (optional)
+
+Nach "auto": einfach mit Powerbank raus — kein Hotspot manuell an/aus.
+Zuhause: Pi verbindet sich wieder mit dem Router (Hotspot geht runter).
+Draußen: Handy an "$HOTSPOT_SSID" — API http://192.168.4.1/api/latest
+EOF
+}
+
+need_nm() {
+  command -v nmcli >/dev/null || { echo "nmcli fehlt"; exit 1; }
+}
+
+ensure_hotspot_profile() {
+  if nmcli -t -f NAME connection show | grep -qx "$HOTSPOT_CONN"; then
+    return 0
+  fi
+  sudo nmcli device wifi hotspot \
+    ssid "$HOTSPOT_SSID" \
+    password "$HOTSPOT_PASSWORD" \
+    ifname wlan0
+  sudo nmcli connection modify "$HOTSPOT_CONN" \
+    connection.id "$HOTSPOT_CONN" \
+    connection.autoconnect yes \
+    connection.autoconnect-priority "$HOTSPOT_PRIO"
+}
+
+boost_home_wifi() {
+  while IFS= read -r name; do
+    [ -z "$name" ] && continue
+    [ "$name" = "$HOTSPOT_CONN" ] && continue
+    type=$(nmcli -t -f TYPE connection show "$name" 2>/dev/null | head -1)
+    [ "$type" = "wifi" ] || continue
+    mode=$(nmcli -t -f 802-11-wireless.mode connection show "$name" 2>/dev/null | head -1)
+    [ "$mode" = "ap" ] && continue
+    sudo nmcli connection modify "$name" \
+      connection.autoconnect yes \
+      connection.autoconnect-priority "$HOME_PRIO" 2>/dev/null || true
+  done < <(nmcli -t -f NAME connection show)
+}
+
+install_dispatcher() {
+  local dest="/etc/NetworkManager/dispatcher.d/90-siglog-net"
+  sudo tee "$dest" > /dev/null <<'DISPATCHER'
+#!/bin/bash
+HOTSPOT_CONN="Hotspot"
+IF="$1"
+ACT="$2"
+[ "$IF" = "wlan0" ] || exit 0
+case "$ACT" in up|down|connectivity-change) ;; *) exit 0 ;; esac
+(
+  sleep 25
+  if ping -c1 -W3 1.1.1.1 >/dev/null 2>&1; then
+    nmcli connection down "$HOTSPOT_CONN" 2>/dev/null || true
+    exit 0
+  fi
+  if ! nmcli -t -f NAME connection show --active | grep -qx "$HOTSPOT_CONN"; then
+    if nmcli -t -f NAME connection show | grep -qx "$HOTSPOT_CONN"; then
+      nmcli connection up "$HOTSPOT_CONN" 2>/dev/null || true
+    fi
+  fi
+) &
+DISPATCHER
+  sudo chmod 755 "$dest"
+}
+
+cmd_auto() {
+  ensure_hotspot_profile
+  sudo nmcli connection modify "$HOTSPOT_CONN" \
+    connection.autoconnect yes \
+    connection.autoconnect-priority "$HOTSPOT_PRIO"
+  boost_home_wifi
+  install_dispatcher
+  sudo nmcli connection down "$HOTSPOT_CONN" 2>/dev/null || true
+  nmcli device wifi rescan 2>/dev/null || true
+  echo "OK: Auto-Modus aktiv."
+  echo "  Zuhause → Router-WLAN (Priorität $HOME_PRIO)"
+  echo "  Kein Router → Hotspot $HOTSPOT_SSID (Priorität $HOTSPOT_PRIO, ~25s Verzögerung)"
+  echo "  Vor dem Rausgehen: nichts tun — oder einmal: siglog-net leave"
+  cmd_status
+}
+
+cmd_leave() {
+  cmd_auto
+  echo ""
+  echo "Du kannst den Pi jetzt vom Strom/network trennen und rausgehen."
+  echo "SSH am Router ist draußen weg — normal. Handy → $HOTSPOT_SSID für API."
+}
+
+cmd_status() {
+  local active ip hotspot_up
+  active=$(nmcli -t -f NAME connection show --active 2>/dev/null | paste -sd, - || echo "—")
+  ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+  hotspot_up=""
+  nmcli -t -f NAME connection show --active | grep -qx "$HOTSPOT_CONN" && hotspot_up="ja"
+  echo "Aktiv:     ${active:-—}"
+  echo "IP:        ${ip:-—}"
+  if [ "$hotspot_up" = "ja" ]; then
+    echo "Modus:     Hotspot (draußen / Fallback)"
+    echo "Handy:     WiFi → $HOTSPOT_SSID  Passwort: $HOTSPOT_PASSWORD"
+    echo "API:       http://192.168.4.1/api/latest"
+  else
+    echo "Modus:     Heim-WLAN (oder verbindet…)"
+    echo "API:       http://${ip:-<ip>}/api/latest"
+    echo "SSH:       ssh pi@${ip:-siglog.local}"
+  fi
+}
+
+cmd_hotspot() {
+  ensure_hotspot_profile
+  sudo nmcli connection up "$HOTSPOT_CONN"
+  cmd_status
+}
+
+cmd_wifi() {
+  sudo nmcli connection down "$HOTSPOT_CONN" 2>/dev/null || true
+  nmcli device wifi rescan 2>/dev/null || true
+  sleep 2
+  best=""
+  while IFS= read -r n; do
+    [ -z "$n" ] || [ "$n" = "$HOTSPOT_CONN" ] && continue
+    type=$(nmcli -t -f TYPE connection show "$n" 2>/dev/null | head -1)
+    [ "$type" = "wifi" ] || continue
+    mode=$(nmcli -t -f 802-11-wireless.mode connection show "$n" 2>/dev/null | head -1)
+    [ "$mode" = "ap" ] && continue
+    best="$n"
+    break
+  done < <(nmcli -t -f NAME connection show)
+  if [ -n "$best" ]; then
+    sudo nmcli connection up "$best" 2>/dev/null || true
+  else
+    echo "Heim-WLAN: warte auf bekanntes Netz (autoconnect)…"
+  fi
+  cmd_status
+}
+
+need_nm
+case "${1:-}" in
+  auto)   cmd_auto ;;
+  leave)  cmd_leave ;;
+  status|"") cmd_status ;;
+  hotspot|on) cmd_hotspot ;;
+  wifi|off|home) cmd_wifi ;;
+  -h|--help|help) usage ;;
+  *) usage; exit 1 ;;
+esac

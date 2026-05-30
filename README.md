@@ -26,11 +26,18 @@ apps/esp32/        Feather firmware (ESP-IDF, planned)
 ## Pi Zero for testing
 
 1. Flash **Raspberry Pi OS Lite (64-bit)** via Raspberry Pi Imager (SSH + home WiFi in advanced options).
-2. On your **PC/Mac** (never on the Pi): `just build-pizero` then `just push-pizero` — dump1090 is built inside that image, not on the Zero.
-3. On the Pi: `bash apps/pizero2w/setup.sh` — Docker pull + `up --no-build` only. No hotspot (keeps home WiFi for SSH). RTL udev rules included.
-4. Dev on your PC: `just run-pizero-fake` — API on port 8080 with `FAKE_SIGNALS=1`.
+2. **Mac** (after code changes): `just push-pizero` (or `just release-pizero`).
+3. **Pi** (first time): clone repo or copy `justfile`, then `sudo apt install -y just` and `just setup-on-pi`.
+4. **Pi** (every update): `cd ~/siglog && just update-on-pi` (or from repo clone: `just update-on-pi`). Never `docker compose build` on the Pi.
+5. **Mac** dev without SDR: `just run-pizero-fake` — API on http://localhost:8080
 
-**Outdoor / no home WiFi:** `~/siglog/scripts/pizero-hotspot-on.sh` — stop with `pizero-hotspot-off.sh`. Optional at setup: `SIGLOG_ENABLE_HOTSPOT=1 bash setup.sh`.
+| Command | Where | What |
+|---------|-------|------|
+| `just push-pizero` | Mac | Build ARM64 image + push to GHCR |
+| `just update-on-pi` | Pi | Pull image + `up --no-build` |
+| `just net-auto` | Pi | WiFi home-first + hotspot fallback |
+
+**WiFi (one-time on Pi):** `siglog-net auto` — at home the Pi uses your router; outdoors it starts hotspot `siglog-pi` after ~25s without internet. Before leaving you only need `siglog-net leave` once (optional). Status: `siglog-net status`. Emergency: `siglog-net hotspot` / `siglog-net wifi`.
 
 **Do not** compile dump1090 on the Pi (`git clone` + `make`). Trixie has no `dump1090-fa` apt package; use the container image instead.
 

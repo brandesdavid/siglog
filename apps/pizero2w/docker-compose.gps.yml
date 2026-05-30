@@ -1,0 +1,6 @@
+services:
+  siglog:
+    devices:
+      - ${GPS_HOST_DEVICE:-/dev/serial0}:/dev/ttyAMA0
+    environment:
+      - GPS_DEVICE=/dev/ttyAMA0
