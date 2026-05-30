@@ -1,0 +1,97 @@
+#!/bin/bash
+set -euo pipefail
+
+_siglog_pi_dir() {
+  echo "${SIGLOG_PI_DIR:-$HOME/siglog}"
+}
+
+_siglog_bootstrap() {
+  local dir
+  dir="$(_siglog_pi_dir)"
+  local local_boot="$dir/scripts/pi-bootstrap.sh"
+  if [[ -f "$local_boot" ]]; then
+    # shellcheck disable=SC1090
+    source "$local_boot"
+    return 0
+  fi
+  if [[ -f "$(dirname "$0")/pi-bootstrap.sh" ]]; then
+    export SIGLOG_INSTALL_LOCAL="$(cd "$(dirname "$0")/.." && pwd)"
+    # shellcheck disable=SC1091
+    source "$(dirname "$0")/pi-bootstrap.sh"
+    return 0
+  fi
+  echo "Run: curl -fsSL .../install.sh | bash"
+  exit 1
+}
+
+usage() {
+  cat <<EOF
+siglog-pi — maintenance on the Pi
+
+  install          Full setup (same as install.sh)
+  sync             Pull scripts + compose from GitHub
+  docker           Pull image + restart container
+  wifi-auto        Home WiFi first, hotspot fallback
+  wifi-status      Show WiFi mode + URLs
+  wifi-hotspot     Hotspot on now
+  wifi-home        Connect home WiFi, hotspot off
+  hotspot-secret   Apply SSID/password from install.conf to Hotspot profile
+  host-control     Enable/restart web UI WiFi watcher
+  rtl              RTL-SDR udev + module blacklist
+  gps              Enable UART for GPS module
+  dedupe           Dedupe ADS-B log (30 min window)
+  logs [svc]       docker logs (svc: api|dump1090|scheduler|all)
+  config           Print install.conf path
+  edit-config      Open install.conf in editor
+
+Config: ~/siglog/install.conf (copy from install.conf.example)
+EOF
+}
+
+cmd="${1:-help}"
+shift || true
+
+_siglog_bootstrap
+
+case "$cmd" in
+  help|-h|--help|"") usage ;;
+  install) siglog_full_install ;;
+  sync) siglog_sync_scripts; echo "Synced." ;;
+  docker|update) siglog_docker_update; echo "Container updated." ;;
+  wifi-auto) siglog_install_wifi ;;
+  wifi-status|wifi) bash "$(_siglog_pi_dir)/scripts/siglog-net" status ;;
+  wifi-hotspot|hotspot) bash "$(_siglog_pi_dir)/scripts/siglog-net" hotspot ;;
+  wifi-home|home) bash "$(_siglog_pi_dir)/scripts/siglog-net" wifi ;;
+  hotspot-secret)
+    siglog_apply_hotspot_secrets
+    echo "Hotspot profile updated from install.conf"
+    ;;
+  host-control) siglog_install_host_control ;;
+  rtl) siglog_install_rtlsdr; echo "RTL-SDR rules applied." ;;
+  gps) siglog_install_gps_uart; echo "GPS UART enabled (reboot may be needed)." ;;
+  dedupe)
+    docker exec siglog /app/scripts/dedupe-signals.sh /app/data/signals.db 30min
+    ;;
+  logs)
+    svc="${1:-all}"
+    case "$svc" in
+      api) docker logs siglog --tail 80 2>&1 ;;
+      dump1090) docker exec siglog cat /app/data/logs/dump1090.err 2>/dev/null | tail -80 ;;
+      scheduler) docker exec siglog cat /app/data/logs/scheduler.err 2>/dev/null | tail -80 ;;
+      *) docker logs siglog --tail 120 2>&1 ;;
+    esac
+    ;;
+  config)
+    siglog_load_config
+    echo "$(_siglog_pi_dir)/install.conf"
+    ;;
+  edit-config)
+    siglog_load_config
+    ${EDITOR:-nano} "$(_siglog_pi_dir)/install.conf"
+    ;;
+  *)
+    echo "Unknown command: $cmd"
+    usage
+    exit 1
+    ;;
+esac

@@ -66,16 +66,30 @@ Ein RTL-SDR = eine Frequenz zur Zeit. Der Scheduler stoppt ADS-B nur für geplan
 
 1. Flash **Raspberry Pi OS Lite 64-bit** (Imager: SSH + Heim-WLAN).  
 2. **Mac:** `just push-pizero` nach Code-Änderungen.  
-3. **Pi (erstes Mal):** `just setup-on-pi` oder `setup.sh`.  
-4. **Pi (Update):** `cd ~/siglog && just update-on-pi`  
-5. **GPS optional:** `SIGLOG_GPS=1 just update-on-pi`  
+3. **Pi (frisch / Pi verloren — empfohlen):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/brandesdavid/siglog/main/apps/pizero2w/install.sh | bash
+nano ~/siglog/install.conf    # Hotspot-Passwort + Lat/Lng
+siglog-pi install
+sudo reboot
+```
+
+4. **Pi (Update):** `siglog-pi docker` oder `cd ~/siglog && just update-on-pi`  
+5. **GPS optional:** `SIGLOG_GPS=1` in `~/siglog/install.conf`, dann `siglog-pi docker`  
+
+**Wartung auf dem Pi:** `siglog-pi help` — einzelne Schritte (WiFi, RTL, Container, dedupe, …).
 
 | Command | Where | What |
 |---------|-------|------|
+| `curl …/install.sh \| bash` | Pi | Erstinstallation (ohne git clone) |
+| `siglog-pi install` | Pi | Volles Setup nach `install.conf` |
+| `siglog-pi docker` | Pi | Image pull + Neustart |
+| `siglog-pi wifi-auto` | Pi | Heim-WLAN + Hotspot-Fallback |
+| `siglog-pi hotspot-secret` | Pi | SSID/Passwort aus `install.conf` anwenden |
 | `just push-pizero` | Mac | ARM64 Image → GHCR |
 | `just update-on-pi` | Pi | `pull` + `up --no-build` |
-| `just run-pizero-fake` | Mac | Test ohne SDR: http://localhost:8080 |
-| `just net-auto` | Pi | Heim-WLAN zuerst, Hotspot Fallback |
+| `just setup-on-pi` | Pi | Wie `install.sh` (aus git clone) |
 
 **Nicht auf dem Pi:** `docker compose build`, `git clone && make` für dump1090.
 
