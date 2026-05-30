@@ -178,6 +178,9 @@ def merge_scheduler_state() -> None:
         state["nextPass"] = sch.get("nextPass")
         state["upcoming"] = sch.get("upcoming", [])
         state["schedulerMessage"] = sch.get("message")
+        if sch.get("observerLat") is not None:
+            state["lat"] = sch.get("observerLat")
+            state["lng"] = sch.get("observerLng")
         mode = sch.get("mode", "ADS-B")
         state["mode"] = mode
         if mode == "NOAA_RECORD":

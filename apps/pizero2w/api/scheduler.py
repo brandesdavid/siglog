@@ -81,6 +81,22 @@ def log_noaa_signal(name: str, detail: str, image: str) -> None:
 
 
 def record_pass(pass_info) -> bool:
+    if pass_info.decoder != "apt" or not pass_info.apt_sat:
+        log.info(
+            "Pass %s uses %s — auto-decode not supported yet (WAV only skipped)",
+            pass_info.name,
+            pass_info.decoder,
+        )
+        write_state(
+            {
+                "mode": "ADS-B",
+                "active": False,
+                "nextPass": pass_info.to_dict(),
+                "message": f"{pass_info.name} pass — LRPT decode coming soon",
+            }
+        )
+        return False
+
     NOAA_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     wav = NOAA_DIR / f"{pass_info.apt_sat}_{stamp}.wav"
@@ -174,17 +190,30 @@ def main() -> None:
         log.info("Scheduler disabled")
         return
 
-    log.info("NOAA scheduler started")
+    log.info("Satellite scheduler started (Meteor-M + legacy NOAA TLE)")
     captured: set[str] = set()
 
     while True:
         try:
             lat, lon = read_position()
             nxt = next_pass(lat, lon, MIN_ELEV)
-            upcoming = [p.to_dict() for p in predict_passes(lat, lon, hours=24, min_el=MIN_ELEV)[:6]]
+            upcoming = [p.to_dict() for p in predict_passes(lat, lon, hours=24, min_el=MIN_ELEV)[:8]]
+            base_state = {
+                "mode": "ADS-B",
+                "active": False,
+                "observerLat": lat,
+                "observerLng": lon,
+                "upcoming": upcoming,
+            }
 
             if nxt is None:
-                write_state({"mode": "ADS-B", "active": False, "nextPass": None, "upcoming": upcoming})
+                msg = None
+                if not upcoming:
+                    msg = (
+                        "No satellite passes in range. NOAA 15/18/19 were decommissioned in 2025; "
+                        "expect Meteor-M passes when TLE refresh works."
+                    )
+                write_state({**base_state, "nextPass": None, "message": msg})
                 time.sleep(60)
                 continue
 
@@ -194,13 +223,11 @@ def main() -> None:
 
             write_state(
                 {
-                    "mode": "ADS-B",
-                    "active": False,
+                    **base_state,
                     "nextPass": nxt.to_dict(),
-                    "upcoming": upcoming,
                     "notify": mins_to_aos <= NOTIFY_MIN,
                     "message": (
-                        f"{nxt.name} in {int(mins_to_aos)} min — set dipole ~54 cm"
+                        f"{nxt.name} in {int(mins_to_aos)} min @ {nxt.freq_mhz} MHz — dipole ~54 cm"
                         if mins_to_aos <= NOTIFY_MIN
                         else None
                     ),

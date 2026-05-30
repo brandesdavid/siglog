@@ -50,6 +50,6 @@ ESP32 can point at `http://<pi-lan-ip>/api/latest` on the same LAN.
 - `GET /api/history` - last 100 logged signals
 - `GET /api/health` - status
 
-**One RTL-SDR:** ADS-B runs by default; ~15 min before a NOAA pass the API shows `nextPass` and antenna hint (~54 cm dipole). During the pass the scheduler stops dump1090, records APT audio, decodes with `noaa-apt`, logs a `RARE` NOAA entry, then restarts ADS-B.
+**One RTL-SDR:** ADS-B runs by default; ~15 min before a satellite pass the API shows `nextPass` and antenna hint (~54 cm dipole). NOAA 15/18/19 were **decommissioned in 2025** — pass prediction uses **Meteor-M** satellites from Celestrak instead. Auto APT decode via `noaa-apt` only applies if legacy NOAA TLE entries reappear; Meteor LRPT decode is planned separately.
 
 Set observer position via GPS (when connected) or `SIGLOG_LAT` / `SIGLOG_LON` in `docker-compose.yml` (default Berlin).
