@@ -75,14 +75,6 @@ def quick_signal_check(freq_mhz: float, duration_sec: int = CHECK_SEC) -> dict:
     if capture_busy():
         _check_lock.release()
         return {"ok": False, "error": "Capture running"}
-    try:
-        from fm_radio import radio_busy
-
-        if radio_busy():
-            _check_lock.release()
-            return {"ok": False, "error": "FM radio active"}
-    except ImportError:
-        pass
     duration_sec = min(max(duration_sec, 3), 15)
     CAPTURE_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -167,13 +159,6 @@ def list_captures() -> list[dict]:
 
 
 def capture_busy() -> bool:
-    try:
-        from fm_radio import radio_busy
-
-        if radio_busy():
-            return True
-    except ImportError:
-        pass
     st = read_capture_state()
     if st.get("active"):
         return True
@@ -206,10 +191,6 @@ def start_capture(
     max_elevation: float | None = None,
 ) -> dict:
     if capture_busy():
-        from fm_radio import radio_busy
-
-        if radio_busy():
-            return {"ok": False, "error": "FM radio active — stop radio first"}
         return {"ok": False, "error": "Capture already running"}
 
     duration_sec = min(max(duration_sec, 30), 900)
