@@ -310,6 +310,57 @@
     }
     .cap-list { padding: 8px 10px; font-size: 11px; }
     .cap-list a { color: var(--ink); }
+    .cap-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px 10px;
+      border-top: 2px solid var(--line);
+      background: var(--scan);
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .cap-head .btn {
+      flex: 0 0 auto;
+      min-width: 0;
+      padding: 4px 8px;
+      font-size: 10px;
+    }
+    .cap-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+    }
+    .cap-table th,
+    .cap-table td {
+      padding: 6px 8px;
+      border-bottom: 1px solid var(--line-light);
+      text-align: left;
+      vertical-align: top;
+    }
+    .cap-table th { font-size: 10px; color: var(--muted); }
+    .cap-badge {
+      display: inline-block;
+      padding: 2px 6px;
+      font-size: 10px;
+      font-weight: 700;
+      border: 1px solid var(--line);
+    }
+    .cap-badge.ok { background: #e8f5ee; border-color: #3a8; }
+    .cap-badge.bad { background: #fff0f0; border-color: #c66; }
+    .cap-badge.unk { background: var(--scan); color: var(--muted); }
+    .cap-actions { white-space: nowrap; }
+    .cap-actions .btn { padding: 4px 8px; font-size: 10px; margin-right: 4px; }
+    .cap-note {
+      padding: 8px 10px;
+      font-size: 10px;
+      color: var(--muted);
+      line-height: 1.4;
+      border-top: 1px solid var(--line-light);
+    }
     .storage-panel {
       padding: 10px;
       border-top: 2px solid var(--line);
@@ -829,11 +880,11 @@
             <div class="signal-bar"><div class="signal-fill waiting" id="ctrlSignalFill"></div></div>
             <div class="signal-hint" id="ctrlSignalHint">Live meter during recording · 5s check pauses ADS-B briefly</div>
             <p class="signal-disclaimer">
-              Signal meter is a heuristic (FM audio level on the Pi). It does not decode LRPT and does not guarantee a usable image at home. Always verify with Check 5s before a long recording.
+              Signal meter is a heuristic (IQ power on the Pi). It does not decode LRPT and does not guarantee a usable image at home. Always verify with Check 5s before a long recording.
             </p>
           </div>
           <div class="hex-note">
-            LRPT decode is heavy on Pi Zero — record raw WAV, decode at home (SatDump).
+            LRPT: IQ baseband WAV for SatDump (meteor_m2-x_lrpt, ~140 kHz s16). Decode at home — not on Pi Zero.
             Recording stops ADS-B for the duration.
           </div>
           <div class="ctrl-grid">
@@ -851,7 +902,12 @@
             <button type="button" class="btn secondary" id="hostAuto">WiFi auto</button>
           </div>
           <div class="ctrl-status" id="ctrlStatus">—</div>
+          <div class="cap-head">
+            <span>Satellite WAV captures</span>
+            <button type="button" class="btn secondary" id="purgeMeteorLog">Clear METEOR log</button>
+          </div>
           <div class="cap-list" id="capList"></div>
+          <p class="cap-note">Recordings stay here as files only — not added to the Log tab. Download WAV, open in SatDump (meteor_m2-x_lrpt, baseband, sample rate from sidecar JSON). Signal badge is heuristic, not proof.</p>
           <div class="storage-panel" id="storagePanel">
             <div class="storage-grid">
               <div><span>SD free</span><b id="storageFree">—</b></div>
@@ -907,7 +963,7 @@
               <li>GA types (C172, DV20, gliders), US N-registrations</li>
               <li>Business jets (Gulfstream, Challenger, Learjet)</li>
               <li>Older narrowbodies (B752, MD-80)</li>
-              <li>Meteor-M LRPT passes (METEOR log type)</li>
+              <li>NOAA APT (scheduler, if satellite returns)</li>
             </ul>
           </div>
           <div class="tier-block">
@@ -1006,13 +1062,13 @@
           <div class="signal-bar"><div class="signal-fill waiting" id="focusSignalFill"></div></div>
           <div class="signal-hint" id="focusSignalHint">Check before recording — dipole toward satellite, clear sky</div>
           <p class="signal-disclaimer">
-            Not guaranteed: meter shows RF/FM level only, not decoded LRPT. A green bar does not promise a good image after SatDump at home.
+            Not guaranteed: meter shows IQ RF level only, not decoded LRPT. A green bar does not promise a good image after SatDump at home.
           </p>
         </div>
         <div class="focus-cap">
           <button type="button" class="btn" id="focusRecord">Record pass</button>
           <button type="button" class="btn secondary" id="focusStop">Stop</button>
-          <div class="focus-cap-status" id="focusCapStatus">LRPT raw WAV · ADS-B pauses during capture · decode at home</div>
+          <div class="focus-cap-status" id="focusCapStatus">LRPT IQ baseband WAV · SatDump at home · ADS-B pauses during capture</div>
         </div>
         <div class="focus-log-preview" id="focusLogPreview" hidden>
           <div class="focus-log-head">
@@ -1176,7 +1232,51 @@
       const hint = document.getElementById("storageHint");
       hint.textContent = storage.warnLow
         ? `Low space — delete old WAVs in Captures above. One Meteor LRPT pass ≈ ${est10} MB (10 min) to ${est15} MB (15 min).`
-        : `Meteor LRPT WAV ≈ ${est10} MB per 10 min · up to ${est15} MB for max pass (48 kHz mono).`;
+        : `Meteor LRPT WAV ≈ ${est10} MB per 10 min · up to ${est15} MB for max pass (140 kHz IQ stereo).`;
+    }
+
+    function renderCaptures(captures) {
+      const cl = document.getElementById("capList");
+      const wavs = (captures || []).filter((c) => c.kind !== "png");
+      if (!wavs.length) {
+        cl.innerHTML = '<p class="cap-note" style="border:0">No WAV captures yet.</p>';
+        return;
+      }
+      const rows = wavs.slice(0, 20).map((c) => {
+        const label = c.passName || c.name.replace(/_\d{8}_\d{6}\.wav$/, "").replace(/_/g, " ");
+        let badge = '<span class="cap-badge unk">—</span>';
+        if (c.signalOk === true) {
+          badge = '<span class="cap-badge ok">signal</span>';
+        } else if (c.signalOk === false) {
+          badge = '<span class="cap-badge bad">weak</span>';
+        }
+        const cov =
+          c.signalCoverage != null ? ` · ${Math.round(c.signalCoverage * 100)}%` : "";
+        return `<tr>
+          <td>${fmtTs(c.ts)}</td>
+          <td>${label}${c.freqMhz ? `<br>${c.freqMhz} MHz` : ""}</td>
+          <td>${badge}${cov}</td>
+          <td>${fmtBytes(c.size)}</td>
+          <td class="cap-actions">
+            <a class="btn secondary" href="${c.url}" download="${c.name}">Download</a>
+            <button type="button" class="btn secondary cap-del" data-name="${c.name}">Del</button>
+          </td>
+        </tr>`;
+      });
+      cl.innerHTML = `<table class="cap-table"><thead><tr>
+        <th>Time</th><th>Pass</th><th>Check</th><th>Size</th><th></th>
+      </tr></thead><tbody>${rows.join("")}</tbody></table>`;
+      cl.querySelectorAll(".cap-del").forEach((btn) => {
+        btn.onclick = async () => {
+          if (!confirm(`Delete ${btn.dataset.name}?`)) return;
+          try {
+            await fetch(`/api/captures/${encodeURIComponent(btn.dataset.name)}`, {
+              method: "DELETE",
+            }).then((r) => r.json());
+            refreshControl();
+          } catch (_) {}
+        };
+      });
     }
 
     function syncCtrlFeedback(text) {
@@ -1459,11 +1559,7 @@
         if (data.hostResult) lines.push("WiFi:\n" + data.hostResult);
         const statusText = lines.join("\n") || "Idle";
         syncCtrlFeedback(statusText);
-        const cl = document.getElementById("capList");
-        cl.innerHTML = (data.captures || [])
-          .slice(0, 8)
-          .map((c) => `<a href="${c.url}">${c.name}</a> (${Math.round(c.size / 1024)} KB)`)
-          .join(" · ") || "No captures yet.";
+        renderCaptures(data.captures);
         renderStorage(data.storage);
       } catch (e) {
         syncCtrlFeedback("Control API error");
@@ -1526,6 +1622,17 @@
     document.getElementById("hostHotspot").onclick = () => hostCmd("hotspot");
     document.getElementById("hostWifi").onclick = () => hostCmd("wifi");
     document.getElementById("hostAuto").onclick = () => hostCmd("auto");
+    document.getElementById("purgeMeteorLog").onclick = async () => {
+      if (!confirm("Remove all METEOR rows from the Log tab? WAV files stay in Captures.")) return;
+      try {
+        const d = await controlPost("/api/history/purge-satellite", { type: "METEOR" });
+        alert(`Removed ${d.deleted || 0} METEOR log entries.`);
+        refresh();
+        refreshControl();
+      } catch (e) {
+        alert(e.message);
+      }
+    };
 
     let logStickBottom = true;
 

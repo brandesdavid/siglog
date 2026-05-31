@@ -18,6 +18,12 @@ SUPERVISOR_CONF = os.getenv(
     "SUPERVISOR_CONFIG", "/etc/supervisor/conf.d/siglog-no-gps.conf"
 )
 
+from capture_format import (
+    CAPTURE_BYTES_PER_SEC,
+    CAPTURE_SAMPLE_RATE,
+    rtl_fm_lrpt_cmd,
+    satdump_decode_hint,
+)
 from signal_monitor import (
     CHECK_SEC,
     analyze_wav,
@@ -32,27 +38,6 @@ log = logging.getLogger("siglog.manual_capture")
 _capture_lock = threading.Lock()
 _capture_proc: subprocess.Popen | None = None
 _check_lock = threading.Lock()
-
-
-def _capture_satellite_name(label: str, pass_name: str | None) -> str:
-    if pass_name:
-        return pass_name
-    low = label.lower()
-    if "apt" in low:
-        return "NOAA APT"
-    if "1379" in low:
-        return "METEOR-M2 3"
-    if "1371" in low:
-        return "METEOR-M 2"
-    return label.replace("_", " ")
-
-
-def _capture_decoder(label: str, decode_apt: bool, decoder: str | None) -> str:
-    if decoder:
-        return decoder
-    if decode_apt or "apt" in label.lower():
-        return "apt"
-    return "lrpt"
 
 
 def _write_capture_state(payload: dict) -> None:
@@ -146,16 +131,65 @@ def list_captures() -> list[dict]:
     for p in sorted(CAPTURE_DIR.glob("*"), key=lambda x: x.stat().st_mtime, reverse=True):
         if not p.is_file():
             continue
+        suffix = p.suffix.lower()
+        if suffix not in (".wav", ".png"):
+            continue
+        if p.name.startswith("check_"):
+            continue
         st = p.stat()
-        out.append(
-            {
-                "name": p.name,
-                "size": st.st_size,
-                "ts": int(st.st_mtime),
-                "url": f"/api/captures/{p.name}",
-            }
-        )
+        row = {
+            "name": p.name,
+            "size": st.st_size,
+            "ts": int(st.st_mtime),
+            "url": f"/api/captures/{p.name}",
+            "kind": "png" if suffix == ".png" else "wav",
+        }
+        meta_path = p.with_suffix(".json")
+        if meta_path.is_file():
+            try:
+                with open(meta_path, encoding="utf-8") as f:
+                    meta = json.load(f)
+                row["passName"] = meta.get("passName")
+                row["signalOk"] = meta.get("signalOk")
+                row["signalCoverage"] = meta.get("signalCoverage")
+                row["signalMessage"] = meta.get("signalMessage")
+                row["freqMhz"] = meta.get("freqMhz")
+            except (OSError, json.JSONDecodeError):
+                pass
+        out.append(row)
     return out[:50]
+
+
+def write_capture_meta(wav: Path, payload: dict) -> None:
+    meta_path = wav.with_suffix(".json")
+    tmp = meta_path.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(payload, f)
+    tmp.replace(meta_path)
+
+
+def delete_capture(name: str) -> dict:
+    safe = Path(name).name
+    if not safe or safe.startswith("."):
+        return {"ok": False, "error": "invalid name"}
+    path = CAPTURE_DIR / safe
+    if not path.is_file():
+        return {"ok": False, "error": "not found"}
+    if path.suffix.lower() not in (".wav", ".png", ".json"):
+        return {"ok": False, "error": "not a capture file"}
+    try:
+        path.unlink()
+        stem = path.with_suffix("")
+        for extra in (stem.with_suffix(".json"), stem.with_suffix(".png")):
+            if extra.is_file() and extra != path:
+                extra.unlink()
+        if path.suffix.lower() == ".wav":
+            png = path.with_suffix(".png")
+            if png.is_file():
+                png.unlink()
+        return {"ok": True, "message": f"Deleted {safe}"}
+    except OSError as e:
+        return {"ok": False, "error": str(e)}
 
 
 def capture_busy() -> bool:
@@ -229,24 +263,7 @@ def start_capture(
         supervisorctl("stop", "dump1090")
         time.sleep(2)
         monitor.start()
-        cmd = [
-            "timeout",
-            str(duration_sec),
-            "rtl_fm",
-            "-d",
-            "0",
-            "-f",
-            f"{freq_mhz}M",
-            "-M",
-            "fm",
-            "-s",
-            "48k",
-            "-g",
-            "40",
-            "-E",
-            "wav",
-            str(wav),
-        ]
+        cmd = rtl_fm_lrpt_cmd(freq_mhz, duration_sec, str(wav))
         try:
             with _capture_lock:
                 _capture_proc = subprocess.Popen(
@@ -263,7 +280,11 @@ def start_capture(
                 _capture_proc = None
             supervisorctl("start", "dump1090")
 
-        ok = rc in (0, 124) and wav.exists() and wav.stat().st_size > 10000
+        ok = (
+            rc in (0, 124)
+            and wav.exists()
+            and wav.stat().st_size > int(duration_sec * CAPTURE_BYTES_PER_SEC * 0.25)
+        )
         sig = analyze_wav(wav) if ok else {}
         result = {
             "active": False,
@@ -277,6 +298,25 @@ def start_capture(
             "message": sig.get("signalMessage") if sig and not sig.get("signalOk") else ("Recording saved" if ok else "Recording failed"),
             **sig,
         }
+        if ok:
+            write_capture_meta(
+                wav,
+                {
+                    "passName": pass_name,
+                    "label": label,
+                    "freqMhz": freq_mhz,
+                    "durationSec": duration_sec,
+                    "sampleRate": CAPTURE_SAMPLE_RATE,
+                    "format": "iq_s16_stereo",
+                    "satdumpPipeline": "meteor_m2-x_lrpt",
+                    "satdumpHint": satdump_decode_hint(freq_mhz),
+                    "signalOk": bool(sig.get("signalOk")),
+                    "signalCoverage": sig.get("signalCoverage"),
+                    "signalMessage": sig.get("signalMessage"),
+                    "wav": wav.name,
+                    "ts": started,
+                },
+            )
         if ok and decode_apt:
             _write_capture_state({**result, "active": True, "message": "Decoding APT…"})
             dec = subprocess.run(
@@ -300,31 +340,13 @@ def start_capture(
             else:
                 result["decodeError"] = (dec.stderr or "")[-400:]
                 result["message"] = "WAV saved, APT decode failed"
-        if ok and sig.get("signalOk"):
-            try:
-                from satellite_log import log_satellite_signal
-
-                sat_name = _capture_satellite_name(label, pass_name)
-                dec = _capture_decoder(label, decode_apt, decoder)
-                if result.get("png"):
-                    detail = f"APT {result['png']} · {wav.name} @ {freq_mhz} MHz"
-                else:
-                    detail = f"LRPT {wav.name} @ {freq_mhz} MHz · {duration_sec}s"
-                log_satellite_signal(
-                    sat_name,
-                    detail,
-                    decoder=dec,
-                    max_elevation=max_elevation,
-                )
-            except Exception as e:
-                log.warning("satellite log failed: %s", e)
-        elif ok and sig and not sig.get("signalOk"):
-            log.warning("capture saved but no satellite signal: %s", sig.get("signalMessage"))
         if ok:
             if sig.get("signalOk"):
-                result["message"] = "Recording saved · satellite signal OK"
+                result["message"] = "WAV saved · signal detected · decode in SatDump"
             elif sig:
-                result["message"] = sig.get("signalMessage", "Recording saved")
+                result["message"] = sig.get("signalMessage", "WAV saved (not added to log)")
+            else:
+                result["message"] = "WAV saved (not added to log)"
         _write_capture_state(result)
 
     threading.Thread(target=worker, daemon=True).start()

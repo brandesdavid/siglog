@@ -1,33 +1,37 @@
 import struct
 import threading
-import time
 from pathlib import Path
 
+from capture_format import CAPTURE_BYTES_PER_SEC, CAPTURE_SAMPLE_RATE, rtl_fm_lrpt_cmd
+
 WAV_HEADER = 44
-SAMPLE_RATE = 48000
 WINDOW_SEC = 2.0
 CHECK_SEC = 5
-RMS_SILENCE = 350
-RMS_SIGNAL = 2200
-RATIO_SIGNAL = 2.2
+RMS_SILENCE = 800
+RMS_SIGNAL = 8000
+RATIO_SIGNAL = 2.5
 COVERAGE_OK = 0.12
 
 
-def pcm16_rms(data: bytes) -> tuple[float, float]:
-    n = len(data) // 2
+def iq_power_rms(data: bytes) -> tuple[float, float]:
+    n = len(data) // 4
     if n < 1:
         return 0.0, 0.0
-    samples = struct.unpack(f"<{n}h", data[: n * 2])
-    sq = sum(s * s for s in samples)
+    sq = 0.0
+    peak = 0.0
+    for i in range(0, n * 4, 4):
+        i_val, q_val = struct.unpack_from("<hh", data, i)
+        mag = (i_val * i_val + q_val * q_val) ** 0.5
+        sq += mag * mag
+        peak = max(peak, mag)
     rms = (sq / n) ** 0.5
-    peak = max(abs(s) for s in samples)
     return rms, peak
 
 
 def read_wav_tail_pcm(path: Path, tail_bytes: int) -> bytes:
     try:
         size = path.stat().st_size
-        if size <= WAV_HEADER + 2:
+        if size <= WAV_HEADER + 4:
             return b""
         with open(path, "rb") as f:
             f.seek(max(WAV_HEADER, size - tail_bytes))
@@ -39,7 +43,7 @@ def read_wav_tail_pcm(path: Path, tail_bytes: int) -> bytes:
 def read_wav_all_pcm(path: Path) -> bytes:
     try:
         size = path.stat().st_size
-        if size <= WAV_HEADER + 2:
+        if size <= WAV_HEADER + 4:
             return b""
         with open(path, "rb") as f:
             f.seek(WAV_HEADER)
@@ -66,13 +70,13 @@ def _level_from_rms(rms: float) -> int:
     import math
 
     db = 20 * math.log10(max(rms, 1))
-    return max(0, min(100, int((db - 20) * 2.2)))
+    return max(0, min(100, int((db - 30) * 1.8)))
 
 
 def snapshot_signal(path: Path, baseline: float | None = None) -> dict:
-    tail = int(SAMPLE_RATE * WINDOW_SEC * 2)
+    tail = int(CAPTURE_SAMPLE_RATE * WINDOW_SEC * 4)
     pcm = read_wav_tail_pcm(path, tail)
-    rms, peak = pcm16_rms(pcm)
+    rms, peak = iq_power_rms(pcm)
     state = _state_from_rms(rms, baseline)
     return {
         "signalRms": round(rms),
@@ -85,19 +89,20 @@ def snapshot_signal(path: Path, baseline: float | None = None) -> dict:
 
 def analyze_wav(path: Path) -> dict:
     pcm = read_wav_all_pcm(path)
-    if len(pcm) < SAMPLE_RATE:
+    min_bytes = int(CAPTURE_SAMPLE_RATE * 4 * 0.5)
+    if len(pcm) < min_bytes:
         return {
             "signalOk": False,
             "signalCoverage": 0.0,
             "signalMessage": "Recording too short to analyze",
         }
-    chunk = int(SAMPLE_RATE * WINDOW_SEC * 2)
+    chunk = int(CAPTURE_SAMPLE_RATE * WINDOW_SEC * 4)
     baseline = None
     hits = 0
     total = 0
     max_rms = 0.0
     for i in range(0, len(pcm) - chunk, chunk):
-        rms, _ = pcm16_rms(pcm[i : i + chunk])
+        rms, _ = iq_power_rms(pcm[i : i + chunk])
         if baseline is None:
             baseline = max(rms, 1.0)
         max_rms = max(max_rms, rms)
@@ -149,24 +154,7 @@ def run_capture_monitor(
 
 
 def quick_check_cmd(freq_mhz: float, duration_sec: int, wav_path: Path) -> list[str]:
-    return [
-        "timeout",
-        str(duration_sec),
-        "rtl_fm",
-        "-d",
-        "0",
-        "-f",
-        f"{freq_mhz}M",
-        "-M",
-        "fm",
-        "-s",
-        "48k",
-        "-g",
-        "40",
-        "-E",
-        "wav",
-        str(wav_path),
-    ]
+    return rtl_fm_lrpt_cmd(freq_mhz, duration_sec, str(wav_path))
 
 
 def interpret_check(snap: dict) -> dict:

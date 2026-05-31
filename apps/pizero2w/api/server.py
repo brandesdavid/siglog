@@ -27,6 +27,7 @@ from rarity import classify_rarity
 from manual_capture import (
     CAPTURE_DIR,
     capture_busy,
+    delete_capture,
     list_captures,
     queue_host_command,
     read_capture_state,
@@ -932,6 +933,24 @@ def api_control_host():
         return jsonify({"ok": True, "message": f"Queued siglog-net {cmd}"})
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
+
+
+@app.route("/api/captures/<path:name>", methods=["DELETE"])
+def api_capture_delete(name):
+    return jsonify(delete_capture(name))
+
+
+@app.route("/api/history/purge-satellite", methods=["POST"])
+def api_history_purge_satellite():
+    body = request.get_json(silent=True) or {}
+    sig_type = body.get("type", "METEOR")
+    if sig_type not in ("METEOR", "NOAA"):
+        return jsonify({"ok": False, "error": "type must be METEOR or NOAA"}), 400
+    cur = db_con.execute("DELETE FROM signals WHERE type = ?", (sig_type,))
+    db_con.commit()
+    with state_lock:
+        state["total"] = total_signals()
+    return jsonify({"ok": True, "deleted": cur.rowcount, "type": sig_type})
 
 
 @app.route("/api/captures/<path:name>")

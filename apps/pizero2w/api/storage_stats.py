@@ -1,10 +1,11 @@
 import shutil
 from pathlib import Path
 
+from capture_format import CAPTURE_BYTES_PER_SEC, CAPTURE_SAMPLE_RATE
+
 DATA = Path("/app/data")
 CAPTURE_DIR = DATA / "captures"
-WAV_RATE = 48000
-WAV_BYTES_PER_SEC = WAV_RATE * 2
+WAV_BYTES_PER_SEC = CAPTURE_BYTES_PER_SEC
 
 
 def _dir_bytes(path: Path) -> int:
@@ -52,4 +53,6 @@ def storage_stats() -> dict:
         "estimateMeteor10MinMb": est_10,
         "estimateMeteor15MinMb": est_15,
         "wavBytesPerSec": WAV_BYTES_PER_SEC,
+        "captureSampleRate": CAPTURE_SAMPLE_RATE,
+        "captureFormat": "iq_s16_stereo",
     }
